@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+:root {
+  --bg-canvas: #F2EFE9;
+  --surface-sticky-yellow: #FFFBEB;
+  --surface-sticky-cream: #FAF6EE;
+  --surface-sticky-mint: #ECFDF5;
+  --surface-sticky-sky: #F0F9FF;
+  --surface-sticky-tape: #F59E0B;
+  --border-sticky: #E6D595;
+  --surface-sheet: #FDFCFA;
+  --ink-primary: #1C1917;
+  --ink-secondary: #57534E;
+  --ink-muted: #78716C;
+  --accent-primary: #0F766E;
+  --accent-primary-hover: #115E59;
+  --accent-maps: #1D4ED8;
+  --danger: #B91C1C;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100dvh;
+}
+
+button,
+summary,
+a,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+button:not(:disabled),
+summary {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+input:not([type="radio"]):not([type="checkbox"]),
+textarea,
+select {
+  font-size: max(1rem, 1em);
+  min-height: 48px;
+}
+
+@media (pointer: coarse) {
+  input:not([type="radio"]):not([type="checkbox"]),
+  select {
+    min-height: 52px;
+  }
+}
+
+input:user-invalid,
+textarea:user-invalid {
+  border-color: var(--danger);
+}
+
+/* Native modal dialog top-layer & scroll containment */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background-color: rgba(28, 25, 23, 0.48);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+dialog[open].bottom-sheet-dialog {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Native details/summary accordion */
+summary {
+  list-style: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+details::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+details:not([open])::details-content {
+  block-size: 0;
+}
+
+details[open] .accordion-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  details::details-content {
+    transition: block-size 0.22s ease-out, content-visibility 0.22s ease-out, display 0.22s ease-out;
+    transition-behavior: allow-discrete;
+  }
+
+  .accordion-chevron {
+    transition: transform 0.2s ease-out;
+  }
+}
+
+.tabular-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.safe-bottom-pad {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}

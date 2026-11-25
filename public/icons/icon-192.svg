@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192" role="img" aria-label="StickyPlan">
+  <rect width="192" height="192" rx="42" fill="#F2EFE9"/>
+  <rect x="28" y="28" width="136" height="136" rx="22" fill="#FFFBEB" stroke="#E6D595" stroke-width="5"/>
+  <rect x="28" y="28" width="136" height="22" rx="10" fill="#F59E0B"/>
+  <line x1="52" y1="78" x2="74" y2="78" stroke="#0F766E" stroke-width="9" stroke-linecap="round"/>
+  <line x1="90" y1="78" x2="140" y2="78" stroke="#1C1917" stroke-width="9" stroke-linecap="round"/>
+  <line x1="52" y1="108" x2="74" y2="108" stroke="#0F766E" stroke-width="9" stroke-linecap="round"/>
+  <line x1="90" y1="108" x2="132" y2="108" stroke="#1C1917" stroke-width="9" stroke-linecap="round"/>
+  <line x1="52" y1="138" x2="74" y2="138" stroke="#0F766E" stroke-width="9" stroke-linecap="round"/>
+  <line x1="90" y1="138" x2="120" y2="138" stroke="#57534E" stroke-width="9" stroke-linecap="round"/>
+</svg>
