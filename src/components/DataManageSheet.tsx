@@ -1,21 +1,26 @@
-import { useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { formatDateHeaderId, getLocalDateString } from '../domain/dateUtils';
 import { formatTripAsPlainText } from '../domain/textFormatter';
 import type {
-  DaySheetRecord,
+  DaySheet,
   ImportMode,
   StickyPlanStoreV1,
   ValidationError,
 } from '../domain/types';
 import { parseAndValidateImportJson } from '../domain/validators';
-import { CopyIcon, DownloadIcon, TrashIcon, UploadIcon } from './Icons';
+import {
+  CopyIcon,
+  DownloadIcon,
+  RotateCcwIcon,
+  TrashIcon,
+  UploadIcon,
+} from './Icons';
 import { ModalSheet } from './ModalSheet';
 
-interface DataManageSheetProps {
+export interface DataManageSheetProps {
   isOpen: boolean;
   store: StickyPlanStoreV1;
-  activeSheet: DaySheetRecord | null;
-  activeSheetItemCount: number;
+  activeSheet: DaySheet | null;
   onClose: () => void;
   onMarkExported: () => void;
   onImportJson: (
@@ -23,10 +28,12 @@ interface DataManageSheetProps {
     byteLength: number,
     mode: ImportMode,
   ) => ValidationError | null;
-  onDeleteActiveSheet: (sheetId: string) => ValidationError | null;
+  onRequestDeleteSheet: (sheet: DaySheet) => void;
+  onRequestResetDefault: () => void;
+  onNotify: (text: string, variant?: 'info' | 'error') => void;
 }
 
-function formatBackupTimestamp(iso: string | null): string {
+function formatBackupTimestamp(iso: string | null | undefined): string {
   if (!iso) return 'Belum pernah';
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return 'Belum pernah';
@@ -43,21 +50,19 @@ export default function DataManageSheet({
   isOpen,
   store,
   activeSheet,
-  activeSheetItemCount,
   onClose,
   onMarkExported,
   onImportJson,
-  onDeleteActiveSheet,
+  onRequestDeleteSheet,
+  onRequestResetDefault,
+  onNotify,
 }: DataManageSheetProps) {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [statusNotice, setStatusNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
   const [pendingImport, setPendingImport] = useState<{
     fileName: string;
     jsonText: string;
     byteLength: number;
   } | null>(null);
-  const [isConfirmingDeleteDate, setIsConfirmingDeleteDate] = useState(false);
 
   function triggerExportDownload(): void {
     setErrorNotice(null);
@@ -73,32 +78,31 @@ export default function DataManageSheet({
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `stickyplan-backup-${getLocalDateString()}.json`;
+    anchor.download = `stickyplan-${getLocalDateString()}.json`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
 
     onMarkExported();
-    setStatusNotice('File backup JSON berhasil diunduh.');
+    onClose();
+    onNotify('File backup JSON berhasil diunduh');
   }
 
-  async function handleCopyPlainText(): Promise<void> {
+  async function handleCopyAllText(): Promise<void> {
     setErrorNotice(null);
     const formatted = formatTripAsPlainText(store);
     try {
       await navigator.clipboard.writeText(formatted);
-      setStatusNotice('Teks jadwal siap tempel ke WhatsApp berhasil disalin.');
+      onClose();
+      onNotify('Seluruh jadwal berhasil disalin ke clipboard');
     } catch {
-      setErrorNotice(
-        'Gagal menyalin otomatis. Izinkan akses clipboard pada browser Anda.',
-      );
+      setErrorNotice('Gagal menyalin otomatis. Izinkan akses clipboard browser.');
     }
   }
 
   async function handleFileSelected(event: Event): Promise<void> {
     setErrorNotice(null);
-    setStatusNotice(null);
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
@@ -112,14 +116,15 @@ export default function DataManageSheet({
       return;
     }
 
-    const hasExistingData = store.itinerary_items.length > 0;
-    if (!hasExistingData) {
+    const hasExistingItems = store.day_sheets.some((s) => s.items.length > 0);
+    if (!hasExistingItems) {
       const err = onImportJson(text, file.size, 'replace');
       if (err) {
         setErrorNotice(err.message);
         return;
       }
-      setStatusNotice('Data jadwal berhasil dipulihkan dari file JSON.');
+      onClose();
+      onNotify('Backup JSON berhasil dipulihkan');
       return;
     }
 
@@ -142,75 +147,62 @@ export default function DataManageSheet({
       return;
     }
     setPendingImport(null);
-    setStatusNotice(
-      mode === 'merge'
-        ? 'Jadwal dari file berhasil digabungkan.'
-        : 'Seluruh jadwal berhasil diganti dari file backup.',
-    );
-  }
-
-  function confirmDeleteSheet(): void {
-    if (!activeSheet) return;
-    const err = onDeleteActiveSheet(activeSheet.id);
-    if (err) {
-      setErrorNotice(err.message);
-      return;
-    }
-    setIsConfirmingDeleteDate(false);
     onClose();
+    onNotify(
+      mode === 'merge'
+        ? 'Jadwal dari file berhasil digabungkan'
+        : 'Seluruh jadwal diganti dari file backup',
+    );
   }
 
   return (
     <ModalSheet
       isOpen={isOpen}
-      title="Kelola Data & Tanggal"
+      title="Kelola Data & Backup"
       onClose={() => {
         setPendingImport(null);
-        setIsConfirmingDeleteDate(false);
         setErrorNotice(null);
-        setStatusNotice(null);
         onClose();
       }}
     >
-      <div className="flex flex-col gap-4">
-        <div className="rounded-[12px] border border-[#E2DDD2] bg-[#F7F4EC] px-3.5 py-3">
-          <p className="m-0 text-[13.5px] font-medium text-[var(--ink-primary)]">
+      <div className="flex flex-col gap-3.5">
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3">
+          <p className="m-0 text-xs font-bold text-stone-900">
             Terakhir di-backup: {formatBackupTimestamp(store.last_exported_at)}
           </p>
-          <p className="mt-1 mb-0 text-[12.5px] text-[var(--ink-secondary)]">
-            Data disimpan lokal di perangkat ini. Unduh JSON atau salin teks secara berkala agar aman saat ganti HP.
+          <p className="mt-1 mb-0 text-[11px] leading-relaxed text-stone-600">
+            Seluruh jadwal tersimpan lokal untuk akses mode pesawat. Export JSON secara berkala sebagai cadangan.
           </p>
         </div>
 
-        <div className="flex flex-col gap-2.5">
+        <div className="flex flex-col gap-2">
           <button
             type="button"
             onClick={triggerExportDownload}
-            className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--accent-primary)] px-4 text-[15px] font-semibold text-white hover:bg-[var(--accent-primary-hover)]"
+            className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-stone-900 px-4 text-xs font-bold text-white hover:bg-stone-800 active:scale-[0.99] transition-transform"
           >
             <DownloadIcon className="w-4 h-4" />
-            <span>Unduh Backup JSON (.json)</span>
+            <span>Export Backup (.json)</span>
           </button>
 
           <button
             type="button"
-            onClick={() => void handleCopyPlainText()}
-            className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-[10px] border border-[#D6CFC2] bg-white px-4 text-[14.5px] font-medium text-[var(--ink-primary)] hover:bg-[#F4F0E8]"
+            onClick={() => void handleCopyAllText()}
+            className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 text-xs font-bold text-stone-800 hover:bg-stone-100"
           >
             <CopyIcon className="w-4 h-4" />
-            <span>Salin Teks Jadwal (Format WhatsApp)</span>
+            <span>Salin Seluruh Jadwal (Teks WA)</span>
           </button>
 
           <div>
             <label
               htmlFor="import-json-input"
-              className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-[10px] border border-[#D6CFC2] bg-white px-4 text-[14.5px] font-medium text-[var(--ink-primary)] cursor-pointer hover:bg-[#F4F0E8]"
+              className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 text-xs font-bold text-stone-800 cursor-pointer hover:bg-stone-100"
             >
               <UploadIcon className="w-4 h-4" />
-              <span>Impor File Backup (.json)</span>
+              <span>Import File Backup (.json)</span>
             </label>
             <input
-              ref={fileInputRef}
               id="import-json-input"
               name="backup_json"
               type="file"
@@ -222,94 +214,73 @@ export default function DataManageSheet({
         </div>
 
         {pendingImport && (
-          <div className="rounded-[12px] border border-[#F59E0B] bg-[#FFFBEB] p-3.5 flex flex-col gap-2.5">
-            <p className="m-0 text-[14px] font-semibold text-[var(--ink-primary)]">
-              File "{pendingImport.fileName}" valid. Pilih cara pemulihan:
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3.5 flex flex-col gap-2">
+            <p className="m-0 text-xs font-bold text-stone-900">
+              File "{pendingImport.fileName}" valid. Pilih metode pemulihan:
             </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => executeImport('merge')}
-                className="min-h-[44px] rounded-[10px] bg-[var(--accent-primary)] px-3 text-[14px] font-semibold text-white"
-              >
-                Gabungkan dengan Jadwal Saat Ini
-              </button>
-              <button
-                type="button"
-                onClick={() => executeImport('replace')}
-                className="min-h-[44px] rounded-[10px] border border-[#B91C1C] bg-white px-3 text-[14px] font-medium text-[var(--danger)]"
-              >
-                Ganti Semua Data Lokal
-              </button>
-              <button
-                type="button"
-                onClick={() => setPendingImport(null)}
-                className="min-h-[44px] rounded-[10px] border border-[#D6CFC2] bg-transparent px-3 text-[13.5px] text-[var(--ink-secondary)]"
-              >
-                Batalkan Impor
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => executeImport('merge')}
+              className="min-h-[42px] rounded-xl bg-stone-900 px-3 text-xs font-bold text-white"
+            >
+              Gabungkan dengan Jadwal Saat Ini
+            </button>
+            <button
+              type="button"
+              onClick={() => executeImport('replace')}
+              className="min-h-[42px] rounded-xl border border-red-300 bg-white px-3 text-xs font-bold text-red-700"
+            >
+              Ganti Semua Data Lokal
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingImport(null)}
+              className="min-h-[38px] rounded-xl bg-transparent px-3 text-xs font-medium text-stone-600"
+            >
+              Batal
+            </button>
           </div>
-        )}
-
-        {statusNotice && (
-          <p
-            role="status"
-            className="m-0 rounded-[10px] border border-[#A7F3D0] bg-[#ECFDF5] px-3 py-2 text-[13.5px] font-medium text-[#065F46]"
-          >
-            {statusNotice}
-          </p>
         )}
 
         {errorNotice && (
           <p
             role="alert"
-            className="m-0 rounded-[10px] border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-[13.5px] font-medium text-[var(--danger)]"
+            className="m-0 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700"
           >
             {errorNotice}
           </p>
         )}
 
-        {activeSheet && (
-          <div className="border-t border-[#E7E2D8] pt-3.5">
-            <p className="m-0 mb-2 text-[13px] font-medium text-[var(--ink-secondary)]">
-              Lembar aktif: {formatDateHeaderId(activeSheet.date)}
-            </p>
-            {!isConfirmingDeleteDate ? (
-              <button
-                type="button"
-                onClick={() => setIsConfirmingDeleteDate(true)}
-                className="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-[10px] border border-[#FECACA] bg-[#FEF2F2] px-3 text-[14px] font-medium text-[var(--danger)]"
-              >
-                <TrashIcon className="w-4 h-4" />
-                <span>Hapus Lembar Tanggal Ini</span>
-              </button>
-            ) : (
-              <div className="rounded-[10px] border border-[#FECACA] bg-[#FEF2F2] p-3 flex flex-col gap-2">
-                <p className="m-0 text-[13.5px] font-medium text-[var(--danger)]">
-                  Hapus {formatDateHeaderId(activeSheet.date)} beserta{' '}
-                  {activeSheetItemCount} kegiatan di dalamnya?
-                </p>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsConfirmingDeleteDate(false)}
-                    className="min-h-[44px] flex-1 rounded-[10px] border border-[#D6CFC2] bg-white px-3 text-[14px] font-medium text-[var(--ink-primary)]"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={confirmDeleteSheet}
-                    className="min-h-[44px] flex-1 rounded-[10px] bg-[var(--danger)] px-3 text-[14px] font-semibold text-white"
-                  >
-                    Yakin Hapus Tanggal
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        <div className="border-t border-stone-200 pt-3 flex flex-col gap-2">
+          {activeSheet && (
+            <button
+              type="button"
+              onClick={() => {
+                const target = activeSheet;
+                onClose();
+                onRequestDeleteSheet(target);
+              }}
+              className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 text-xs font-bold text-red-700 hover:bg-red-100"
+            >
+              <TrashIcon className="w-3.5 h-3.5" />
+              <span>
+                Hapus Tanggal Aktif ({formatDateHeaderId(activeSheet.date)})
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onRequestResetDefault();
+            }}
+            className="inline-flex min-h-[42px] w-full items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-stone-100 px-3 text-xs font-bold text-stone-700 hover:bg-stone-200"
+          >
+            <RotateCcwIcon className="w-3.5 h-3.5" />
+            <span>Reset ke Jadwal Awal Lampung</span>
+          </button>
+        </div>
       </div>
     </ModalSheet>
   );

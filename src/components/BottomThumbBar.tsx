@@ -18,17 +18,17 @@ export function BottomThumbBar({
   onAddActivity,
 }: BottomThumbBarProps) {
   return (
-    <div
+    <footer
       data-no-swipe
-      className="fixed bottom-0 inset-x-0 z-20 border-t border-[#DED8CC] bg-[var(--surface-sheet)]/95 backdrop-blur-[2px] safe-bottom-pad pt-2.5"
+      className="fixed bottom-0 inset-x-0 z-30 border-t border-stone-200 bg-white/95 backdrop-blur-md safe-bottom-pad pt-2.5"
     >
-      <div className="mx-auto flex w-full max-w-[460px] items-center gap-2 px-3">
+      <div className="mx-auto flex w-full max-w-md items-center gap-2.5 px-4">
         <button
           type="button"
           onClick={onPrev}
           disabled={!canPrev}
           aria-label="Hari Sebelumnya"
-          className="inline-flex min-h-[48px] min-w-[68px] items-center justify-center gap-1 rounded-[10px] border border-[#D6CFC2] bg-white px-3 text-[14px] font-medium text-[var(--ink-primary)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#F4F0E8]"
+          className="inline-flex min-h-[44px] min-w-[84px] items-center justify-center gap-1 rounded-xl border border-stone-200 bg-white px-3 text-xs font-bold text-stone-800 disabled:opacity-35 disabled:cursor-not-allowed hover:bg-stone-100 active:scale-95 transition-transform"
         >
           <ChevronLeftIcon className="w-4 h-4" />
           <span>Prev</span>
@@ -38,9 +38,9 @@ export function BottomThumbBar({
           type="button"
           onClick={onAddActivity}
           disabled={!hasActiveSheet}
-          className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-[var(--accent-primary)] px-4 text-[15px] font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed hover:bg-[var(--accent-primary-hover)]"
+          className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-stone-900 px-4 text-sm font-bold text-white shadow-xs disabled:opacity-40 disabled:cursor-not-allowed hover:bg-stone-800 active:scale-[0.99] transition-transform"
         >
-          <PlusIcon className="w-5 h-5" />
+          <PlusIcon className="w-4 h-4" />
           <span>Tambah Kegiatan</span>
         </button>
 
@@ -49,12 +49,12 @@ export function BottomThumbBar({
           onClick={onNext}
           disabled={!canNext}
           aria-label="Hari Berikutnya"
-          className="inline-flex min-h-[48px] min-w-[68px] items-center justify-center gap-1 rounded-[10px] border border-[#D6CFC2] bg-white px-3 text-[14px] font-medium text-[var(--ink-primary)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[#F4F0E8]"
+          className="inline-flex min-h-[44px] min-w-[84px] items-center justify-center gap-1 rounded-xl border border-stone-200 bg-white px-3 text-xs font-bold text-stone-800 disabled:opacity-35 disabled:cursor-not-allowed hover:bg-stone-100 active:scale-95 transition-transform"
         >
           <span>Next</span>
           <ChevronRightIcon className="w-4 h-4" />
         </button>
       </div>
-    </div>
+    </footer>
   );
 }

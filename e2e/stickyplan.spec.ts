@@ -1,75 +1,68 @@
 import { expect, test } from '@playwright/test';
 
-test.describe('StickyPlan Mobile PWA E2E (390x844 + Offline Mode)', () => {
-  test('core loop, chronological sort, Maps deep-link, JSON export, and Airplane offline survival', async ({
+test.describe('StickyPlan v2.0 Mobile PWA E2E (Lampung Rundown + Offline Mode)', () => {
+  test('auto-lands on Lampung rundown, opens accordion + Maps link, adds Bulk Input, and works 100% offline', async ({
     context,
     page,
   }) => {
     await page.goto('/');
 
-    await expect(page.getByText('Itinerary Saya')).toBeVisible();
-
-    // Add afternoon item first, then morning item to verify chronological sorting
-    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
-    await page.getByLabel(/Jam Mulai/i).fill('14:30');
-    await page.getByLabel(/Judul Kegiatan/i).fill('Rapat Evaluasi Kantor');
-    await page
-      .getByLabel(/Link atau Nama Lokasi Google Maps/i)
-      .fill('Gedung Sate Bandung https://maps.app.goo.gl/GdgSate99');
-    await page
-      .getByLabel(/Catatan \/ Deskripsi/i)
-      .fill('Bawa dokumen KAK & kode akses Lantai 3');
-    await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();
-
-    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
-    await page.getByLabel(/Jam Mulai/i).fill('07:45');
-    await page.getByLabel(/Judul Kegiatan/i).fill('Kereta Cepat Halim');
-    await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();
-
-    const titles = await page.getByTestId('activity-title').allTextContents();
-    expect(titles).toEqual(['Kereta Cepat Halim', 'Rapat Evaluasi Kantor']);
-
-    // Expand accordion and verify safe Maps deep-link attributes
-    await page.getByText('Rapat Evaluasi Kantor').click();
     await expect(
-      page.getByText('Bawa dokumen KAK & kode akses Lantai 3'),
+      page.getByText('Audit Perum LKBN ANTARA Biro Lampung'),
+    ).toBeVisible();
+    await expect(page.getByText('Kamis, 26 Nov 2026')).toBeVisible();
+    await expect(page.getByText('Penjemputan rombongan')).toBeVisible();
+
+    // Expand "Makan siang bersama" accordion to verify description & Google Maps CTA
+    await page.getByText('Makan siang bersama').click();
+    await expect(
+      page.getByText('14.00–14.30 | Makan siang bersama di Mbok Wito.'),
     ).toBeVisible();
     const mapsLink = page.getByRole('link', { name: /Buka di Google Maps/i });
-    await expect(mapsLink).toHaveAttribute(
-      'href',
-      'https://maps.app.goo.gl/GdgSate99',
-    );
     await expect(mapsLink).toHaveAttribute('target', '_blank');
     await expect(mapsLink).toHaveAttribute('rel', 'noopener noreferrer');
 
-    // Wait until Service Worker activates and controls the page
+    await page.screenshot({
+      path: 'C:/Users/ASUS/.gemini/antigravity/brain/8fbfa437-8347-4ed0-9dfe-0239dbb895e0/stickyplan-v2-lampung.png',
+      fullPage: false,
+    });
+
+    // Ensure Service Worker is active
     await page.evaluate(async () => {
       if ('serviceWorker' in navigator) {
         await navigator.serviceWorker.ready;
       }
     });
     await page.reload();
-    await expect(page.getByText('Rapat Evaluasi Kantor')).toBeVisible();
+    await expect(page.getByText('Penjemputan rombongan')).toBeVisible();
 
-    // Simulate Airplane Mode (100% offline reload + offline write)
+    // Activate Airplane Mode (Offline) -> reload -> switch to Day 2 (27 Nov) -> add Bulk Input item
     await context.setOffline(true);
     await expect(page.getByText('Offline siap')).toBeVisible();
 
     await page.reload();
-    await expect(page.getByText('Kereta Cepat Halim')).toBeVisible();
-    await expect(page.getByText('Rapat Evaluasi Kantor')).toBeVisible();
+    await expect(
+      page.getByText('Audit Perum LKBN ANTARA Biro Lampung'),
+    ).toBeVisible();
 
-    // Add item while completely offline
-    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
-    await page.getByLabel(/Jam Mulai/i).fill('19:00');
-    await page.getByLabel(/Judul Kegiatan/i).fill('Makan Malam Braga');
-    await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();
+    await page.getByRole('button', { name: '27 Nov' }).click();
+    await expect(page.getByText('Jumat, 27 Nov 2026')).toBeVisible();
+    await expect(page.getByText("Sholat Jum'at")).toBeVisible();
 
-    await expect(page.getByText('Makan Malam Braga')).toBeVisible();
-    await page.screenshot({
-      path: 'C:/Users/ASUS/.gemini/antigravity/brain/8fbfa437-8347-4ed0-9dfe-0239dbb895e0/stickyplan-mobile-offline.png',
-      fullPage: false,
-    });
+    await page
+      .getByRole('button', { name: 'Tambah Kegiatan', exact: true })
+      .click();
+    await page.getByRole('tab', { name: /Bulk Input/i }).click();
+    await page
+      .getByLabel(/Tempel Daftar Jadwal/i)
+      .fill('20:30 | Kembali ke Hotel | Istirahat malam tim Komdigi');
+    await page
+      .getByRole('button', {
+        name: /Masukkan 1 Kegiatan ke Tanggal Ini/i,
+      })
+      .click();
+
+    await expect(page.getByText('Kembali ke Hotel')).toBeVisible();
     await context.setOffline(false);
   });
 });

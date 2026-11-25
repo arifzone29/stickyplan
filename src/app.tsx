@@ -1,19 +1,27 @@
 import type { ComponentType } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useState } from 'preact/hooks';
 import { ActivityFormSheet } from './components/ActivityFormSheet';
 import { BottomThumbBar } from './components/BottomThumbBar';
+import { ConfirmModal } from './components/ConfirmModal';
+import type { DataManageSheetProps } from './components/DataManageSheet';
 import { DatePillStrip } from './components/DatePillStrip';
 import { SafeModeScreen } from './components/SafeModeScreen';
 import { StickySheetCard } from './components/StickySheetCard';
+import { ToastRegion, type ToastMessage } from './components/Toast';
 import { TopBar } from './components/TopBar';
-import { getLocalDateString, resolveInitialDaySheetId } from './domain/dateUtils';
-import { sortDaySheets, sortItineraryItems } from './domain/sorting';
+import {
+  formatDateHeaderId,
+  getLocalDateString,
+  resolveInitialDaySheetId,
+} from './domain/dateUtils';
+import { sortDaySheets } from './domain/sorting';
+import { formatDaySheetAsPlainText } from './domain/textFormatter';
 import type {
   ActivityInputDto,
+  DaySheet,
   DaySheetInputDto,
-  DaySheetRecord,
-  ImportMode,
-  ItineraryItemRecord,
+  ItineraryItem,
+  NoteColor,
   StickyPlanStoreV1,
   ValidationError,
 } from './domain/types';
@@ -24,30 +32,20 @@ import {
   type ItineraryRepository,
 } from './storage/repository';
 
-interface LazyDataManageProps {
-  isOpen: boolean;
-  store: StickyPlanStoreV1;
-  activeSheet: DaySheetRecord | null;
-  activeSheetItemCount: number;
-  onClose: () => void;
-  onMarkExported: () => void;
-  onImportJson: (
-    jsonText: string,
-    byteLength: number,
-    mode: ImportMode,
-  ) => ValidationError | null;
-  onDeleteActiveSheet: (sheetId: string) => ValidationError | null;
-}
-
 export interface AppProps {
   repository?: ItineraryRepository;
   getTodayLocal?: () => string;
 }
 
+type PendingConfirmation =
+  | { kind: 'delete-item'; sheetId: string; item: ItineraryItem }
+  | { kind: 'delete-sheet'; sheet: DaySheet }
+  | { kind: 'reset-default' };
+
 export function App({ repository, getTodayLocal }: AppProps = {}) {
   const repo = useMemo(
-    () => repository ?? createLocalStorageRepository({ getTodayLocal }),
-    [repository, getTodayLocal],
+    () => repository ?? createLocalStorageRepository(),
+    [repository],
   );
   const todayLocal = useMemo(
     () => (getTodayLocal ? getTodayLocal() : getLocalDateString()),
@@ -62,19 +60,26 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
       ? resolveInitialDaySheetId(bootState.store.day_sheets, todayLocal)
       : null,
   );
+  const [openItemId, setOpenItemId] = useState<string | null>(null);
 
   const [isActivityFormOpen, setIsActivityFormOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState<ItineraryItemRecord | null>(
-    null,
-  );
+  const [editingItem, setEditingItem] = useState<ItineraryItem | null>(null);
   const [isDataManageOpen, setIsDataManageOpen] = useState(false);
   const [DataManageComponent, setDataManageComponent] =
-    useState<ComponentType<LazyDataManageProps> | null>(null);
-  const [storageBannerError, setStorageBannerError] = useState<string | null>(
-    null,
-  );
+    useState<ComponentType<DataManageSheetProps> | null>(null);
+
+  const [pendingConfirm, setPendingConfirm] =
+    useState<PendingConfirmation | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
 
   const isOnline = useOnlineStatus();
+
+  const showToast = useCallback(
+    (text: string, variant: 'info' | 'error' = 'info') => {
+      setToast({ id: Date.now(), text, variant });
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!isDataManageOpen || DataManageComponent) return;
@@ -95,47 +100,32 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
         rawSnapshot={bootState.rawSnapshot}
         reason={bootState.reason}
         onResetSafeMode={() => {
-          const res = repo.resetSafeMode();
-          if (!res.ok) {
-            setStorageBannerError(res.error.message);
-            return;
-          }
+          const res = repo.resetToDefaultSeed();
+          if (!res.ok) return;
           setBootState({ status: 'ready', store: res.data });
           setActiveSheetId(
             resolveInitialDaySheetId(res.data.day_sheets, todayLocal),
           );
+          showToast('Data berhasil dipulihkan ke jadwal awal');
         }}
       />
     );
   }
 
   const store = bootState.store;
-  const activeTrip =
-    store.trips.find((t) => t.id === store.active_trip_id) ?? store.trips[0];
-
-  const sortedSheets = sortDaySheets(
-    store.day_sheets.filter((s) => s.trip_id === store.active_trip_id),
-  );
-
+  const sortedSheets = sortDaySheets(store.day_sheets);
   const resolvedIndex = sortedSheets.findIndex((s) => s.id === activeSheetId);
   const currentIndex =
     resolvedIndex !== -1 ? resolvedIndex : sortedSheets.length > 0 ? 0 : -1;
   const currentSheet =
     currentIndex >= 0 ? (sortedSheets[currentIndex] ?? null) : null;
 
-  const activeItems = currentSheet
-    ? sortItineraryItems(
-        store.itinerary_items.filter(
-          (item) => item.day_sheet_id === currentSheet.id,
-        ),
-      )
-    : [];
-
   const canPrev = currentIndex > 0;
   const canNext = currentIndex >= 0 && currentIndex < sortedSheets.length - 1;
+  const isAnyModalOpen =
+    isActivityFormOpen || isDataManageOpen || pendingConfirm !== null;
 
   function commitStore(nextStore: StickyPlanStoreV1): void {
-    setStorageBannerError(null);
     setBootState({ status: 'ready', store: nextStore });
   }
 
@@ -143,173 +133,309 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
     const res = repo.updateTripTitle(store, newTitle);
     if (!res.ok) {
       if (res.error.code === 'QUOTA_EXCEEDED') {
-        setStorageBannerError(res.error.message);
+        showToast(res.error.message, 'error');
       }
       return res.error.message;
     }
     commitStore(res.data);
+    showToast('Judul perjalanan diperbarui');
     return null;
   }
 
   function handleAddSheet(dto: DaySheetInputDto): string | null {
-    const res = repo.addDaySheet(store, dto);
+    const res = repo.addOrSelectDaySheet(store, dto);
     if (!res.ok) {
       if (res.error.code === 'QUOTA_EXCEEDED') {
-        setStorageBannerError(res.error.message);
+        showToast(res.error.message, 'error');
       }
       return res.error.message;
     }
-    const added = res.data.day_sheets.find(
-      (s) => s.trip_id === res.data.active_trip_id && s.date === dto.date,
+    commitStore(res.data.store);
+    setActiveSheetId(res.data.sheetId);
+    setOpenItemId(null);
+    showToast(
+      res.data.alreadyExisted
+        ? 'Berpindah ke tanggal yang sudah terdaftar'
+        : 'Lembar tanggal baru ditambahkan',
     );
-    commitStore(res.data);
-    if (added) {
-      setActiveSheetId(added.id);
-    }
     return null;
   }
 
-  function handleSaveActivity(
+  function handleSaveSingleActivity(
     dto: ActivityInputDto,
     editingId: string | null,
   ): ValidationError | null {
     if (!currentSheet) {
       return {
         code: 'NO_ACTIVE_SHEET',
-        message: 'Pilih atau tambahkan tanggal terlebih dahulu.',
+        message: 'Tambahkan lembar tanggal terlebih dahulu.',
       };
     }
 
     if (editingId) {
-      const res = repo.updateActivity(store, editingId, dto);
-      if (!res.ok) {
-        if (res.error.code === 'QUOTA_EXCEEDED') {
-          setStorageBannerError(res.error.message);
-        }
-        return res.error;
-      }
+      const res = repo.updateActivity(store, currentSheet.id, editingId, dto);
+      if (!res.ok) return res.error;
       commitStore(res.data);
+      showToast('Kegiatan diperbarui');
       return null;
     }
 
     const res = repo.addActivity(store, currentSheet.id, dto);
-    if (!res.ok) {
-      if (res.error.code === 'QUOTA_EXCEEDED') {
-        setStorageBannerError(res.error.message);
-      }
-      return res.error;
-    }
+    if (!res.ok) return res.error;
     commitStore(res.data.store);
+    showToast('Kegiatan ditambahkan');
     return null;
   }
 
-  function handleDeleteActivity(itemId: string): ValidationError | null {
-    const res = repo.deleteActivity(store, itemId);
+  function handleSaveBulkActivities(
+    rawBulkText: string,
+  ): ValidationError | null {
+    if (!currentSheet) {
+      return {
+        code: 'NO_ACTIVE_SHEET',
+        message: 'Tambahkan lembar tanggal terlebih dahulu.',
+      };
+    }
+    const res = repo.addBulkActivities(store, currentSheet.id, rawBulkText);
     if (!res.ok) return res.error;
-    commitStore(res.data);
+    commitStore(res.data.store);
+    showToast(`${res.data.addedCount} kegiatan berhasil ditambahkan`);
     return null;
   }
 
-  function handleDeleteSheet(sheetId: string): ValidationError | null {
-    const res = repo.deleteDaySheet(store, sheetId);
-    if (!res.ok) return res.error;
-    const remaining = sortDaySheets(
-      res.data.day_sheets.filter((s) => s.trip_id === res.data.active_trip_id),
-    );
-    commitStore(res.data);
-    setActiveSheetId(resolveInitialDaySheetId(remaining, todayLocal));
-    return null;
+  async function handleCopyActiveDay(): Promise<void> {
+    if (!currentSheet) return;
+    try {
+      await navigator.clipboard.writeText(
+        formatDaySheetAsPlainText(currentSheet),
+      );
+      showToast('Jadwal hari ini disalin ke clipboard');
+    } catch {
+      showToast('Gagal menyalin otomatis', 'error');
+    }
   }
+
+  function executeConfirmedAction(): void {
+    if (!pendingConfirm) return;
+    const action = pendingConfirm;
+    setPendingConfirm(null);
+
+    if (action.kind === 'delete-item') {
+      const res = repo.deleteActivity(store, action.sheetId, action.item.id);
+      if (!res.ok) {
+        showToast(res.error.message, 'error');
+        return;
+      }
+      if (openItemId === action.item.id) setOpenItemId(null);
+      commitStore(res.data);
+      showToast('Kegiatan dihapus');
+      return;
+    }
+
+    if (action.kind === 'delete-sheet') {
+      const res = repo.deleteDaySheet(store, action.sheet.id);
+      if (!res.ok) {
+        showToast(res.error.message, 'error');
+        return;
+      }
+      commitStore(res.data);
+      setOpenItemId(null);
+      setActiveSheetId(
+        resolveInitialDaySheetId(res.data.day_sheets, todayLocal),
+      );
+      showToast('Lembar tanggal dihapus');
+      return;
+    }
+
+    if (action.kind === 'reset-default') {
+      const res = repo.resetToDefaultSeed();
+      if (!res.ok) {
+        showToast(res.error.message, 'error');
+        return;
+      }
+      commitStore(res.data);
+      setOpenItemId(null);
+      setActiveSheetId(
+        resolveInitialDaySheetId(res.data.day_sheets, todayLocal),
+      );
+      showToast('Dikembalikan ke jadwal awal Audit ANTARA Lampung');
+    }
+  }
+
+  const confirmDialogMeta = useMemo(() => {
+    if (!pendingConfirm) return null;
+    if (pendingConfirm.kind === 'delete-item') {
+      return {
+        title: 'Hapus Kegiatan?',
+        message: `Kegiatan "${pendingConfirm.item.title}" (${pendingConfirm.item.start_time}) akan dihapus dari jadwal hari ini.`,
+        confirmLabel: 'Ya, Hapus',
+      };
+    }
+    if (pendingConfirm.kind === 'delete-sheet') {
+      const count = pendingConfirm.sheet.items.length;
+      return {
+        title: 'Hapus Lembar Tanggal?',
+        message: `Tanggal ${formatDateHeaderId(pendingConfirm.sheet.date)} beserta ${count} kegiatan di dalamnya akan dihapus permanen.`,
+        confirmLabel: 'Ya, Hapus',
+      };
+    }
+    return {
+      title: 'Reset ke Jadwal Awal?',
+      message:
+        'Seluruh perubahan lokal akan dikembalikan ke rundown awal Audit Perum LKBN ANTARA Biro Lampung. Pastikan Anda sudah Export JSON jika perlu.',
+      confirmLabel: 'Ya, Reset',
+    };
+  }, [pendingConfirm]);
 
   return (
-    <div className="min-h-dvh flex flex-col">
-      <TopBar
-        tripTitle={activeTrip?.title ?? 'Itinerary Saya'}
-        isOnline={isOnline}
-        hasNeverExported={
-          store.last_exported_at === null && store.itinerary_items.length > 0
-        }
-        onSaveTripTitle={handleSaveTripTitle}
-        onOpenDataManage={() => setIsDataManageOpen(true)}
+    <div className="min-h-dvh bg-stone-100">
+      <ToastRegion
+        toast={toast}
+        isModalOpen={isAnyModalOpen}
+        onDismiss={() => setToast(null)}
       />
 
-      {storageBannerError && (
-        <div
-          role="alert"
-          className="mx-auto mb-2 w-full max-w-[460px] px-3"
-        >
-          <div className="rounded-[10px] border border-[#FECACA] bg-[#FEF2F2] px-3.5 py-2.5 text-[13.5px] font-medium text-[var(--danger)]">
-            {storageBannerError}
-          </div>
-        </div>
-      )}
+      <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-stone-50 pb-24 shadow-xl shadow-stone-300/60 relative">
+        <TopBar
+          tripTitle={store.trip.title}
+          isOnline={isOnline}
+          hasNeverExported={
+            !store.last_exported_at &&
+            store.day_sheets.some((s) => s.items.length > 0)
+          }
+          onSaveTripTitle={handleSaveTripTitle}
+          onOpenDataManage={() => setIsDataManageOpen(true)}
+        />
 
-      <DatePillStrip
-        sheets={sortedSheets}
-        activeSheetId={currentSheet?.id ?? null}
-        todayLocal={todayLocal}
-        onSelectSheet={(id) => setActiveSheetId(id)}
-        onAddSheet={handleAddSheet}
-      />
+        <DatePillStrip
+          sheets={sortedSheets}
+          activeSheetId={currentSheet?.id ?? null}
+          todayLocal={todayLocal}
+          onSelectSheet={(id) => {
+            setActiveSheetId(id);
+            setOpenItemId(null);
+          }}
+          onAddSheet={handleAddSheet}
+        />
 
-      <StickySheetCard
-        sheet={currentSheet}
-        sheetIndex={currentIndex}
-        totalSheets={sortedSheets.length}
-        todayLocal={todayLocal}
-        items={activeItems}
-        canPrev={canPrev}
-        canNext={canNext}
-        onPrev={() => {
-          if (canPrev) {
-            const prevSheet = sortedSheets[currentIndex - 1];
-            if (prevSheet) setActiveSheetId(prevSheet.id);
+        <StickySheetCard
+          sheet={currentSheet}
+          sheetIndex={currentIndex}
+          totalSheets={sortedSheets.length}
+          todayLocal={todayLocal}
+          openItemId={openItemId}
+          canPrev={canPrev}
+          canNext={canNext}
+          onPrev={() => {
+            if (canPrev) {
+              const prev = sortedSheets[currentIndex - 1];
+              if (prev) {
+                setActiveSheetId(prev.id);
+                setOpenItemId(null);
+              }
+            }
+          }}
+          onNext={() => {
+            if (canNext) {
+              const next = sortedSheets[currentIndex + 1];
+              if (next) {
+                setActiveSheetId(next.id);
+                setOpenItemId(null);
+              }
+            }
+          }}
+          onToggleItem={(itemId) =>
+            setOpenItemId((prev) => (prev === itemId ? null : itemId))
           }
-        }}
-        onNext={() => {
-          if (canNext) {
-            const nextSheet = sortedSheets[currentIndex + 1];
-            if (nextSheet) setActiveSheetId(nextSheet.id);
-          }
-        }}
-        onAddActivity={() => {
-          setEditingItem(null);
-          setIsActivityFormOpen(true);
-        }}
-        onEditActivity={(item) => {
-          setEditingItem(item);
-          setIsActivityFormOpen(true);
-        }}
-        onAddFirstDate={() => {
-          handleAddSheet({
-            date: todayLocal,
-            note_color: 'warm-yellow',
-            day_summary: null,
-          });
-        }}
-      />
+          onChangeColor={(color: NoteColor) => {
+            if (!currentSheet) return;
+            const res = repo.updateDaySheetMeta(store, currentSheet.id, {
+              note_color: color,
+            });
+            if (res.ok) commitStore(res.data);
+          }}
+          onSaveSummary={(summary) => {
+            if (!currentSheet) return;
+            const res = repo.updateDaySheetMeta(store, currentSheet.id, {
+              day_summary: summary,
+            });
+            if (res.ok) {
+              commitStore(res.data);
+              showToast('Ringkasan hari disimpan');
+            }
+          }}
+          onSortByTime={() => {
+            if (!currentSheet) return;
+            const res = repo.sortSheetByTime(store, currentSheet.id);
+            if (res.ok) {
+              commitStore(res.data);
+              showToast('Jadwal diurutkan berdasarkan jam');
+            }
+          }}
+          onCopyDayText={() => void handleCopyActiveDay()}
+          onReorderItem={(fromIdx, toIdx) => {
+            if (!currentSheet) return;
+            const res = repo.reorderActivities(
+              store,
+              currentSheet.id,
+              fromIdx,
+              toIdx,
+            );
+            if (res.ok) commitStore(res.data);
+          }}
+          onAddActivity={() => {
+            setEditingItem(null);
+            setIsActivityFormOpen(true);
+          }}
+          onEditActivity={(item) => {
+            setEditingItem(item);
+            setIsActivityFormOpen(true);
+          }}
+          onDeleteActivity={(item) => {
+            if (!currentSheet) return;
+            setPendingConfirm({
+              kind: 'delete-item',
+              sheetId: currentSheet.id,
+              item,
+            });
+          }}
+          onAddFirstDate={() => {
+            handleAddSheet({
+              date: todayLocal,
+              note_color: 'warm-yellow',
+              day_summary: null,
+            });
+          }}
+        />
 
-      <BottomThumbBar
-        canPrev={canPrev}
-        canNext={canNext}
-        hasActiveSheet={currentSheet !== null}
-        onPrev={() => {
-          if (canPrev) {
-            const prevSheet = sortedSheets[currentIndex - 1];
-            if (prevSheet) setActiveSheetId(prevSheet.id);
-          }
-        }}
-        onNext={() => {
-          if (canNext) {
-            const nextSheet = sortedSheets[currentIndex + 1];
-            if (nextSheet) setActiveSheetId(nextSheet.id);
-          }
-        }}
-        onAddActivity={() => {
-          setEditingItem(null);
-          setIsActivityFormOpen(true);
-        }}
-      />
+        <BottomThumbBar
+          canPrev={canPrev}
+          canNext={canNext}
+          hasActiveSheet={currentSheet !== null}
+          onPrev={() => {
+            if (canPrev) {
+              const prev = sortedSheets[currentIndex - 1];
+              if (prev) {
+                setActiveSheetId(prev.id);
+                setOpenItemId(null);
+              }
+            }
+          }}
+          onNext={() => {
+            if (canNext) {
+              const next = sortedSheets[currentIndex + 1];
+              if (next) {
+                setActiveSheetId(next.id);
+                setOpenItemId(null);
+              }
+            }
+          }}
+          onAddActivity={() => {
+            setEditingItem(null);
+            setIsActivityFormOpen(true);
+          }}
+        />
+      </div>
 
       <ActivityFormSheet
         isOpen={isActivityFormOpen}
@@ -318,8 +444,16 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
           setIsActivityFormOpen(false);
           setEditingItem(null);
         }}
-        onSave={handleSaveActivity}
-        onDelete={handleDeleteActivity}
+        onSaveSingle={handleSaveSingleActivity}
+        onSaveBulk={handleSaveBulkActivities}
+        onRequestDelete={(item) => {
+          if (!currentSheet) return;
+          setPendingConfirm({
+            kind: 'delete-item',
+            sheetId: currentSheet.id,
+            item,
+          });
+        }}
       />
 
       {isDataManageOpen && DataManageComponent && (
@@ -327,7 +461,6 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
           isOpen={isDataManageOpen}
           store={store}
           activeSheet={currentSheet}
-          activeSheetItemCount={activeItems.length}
           onClose={() => setIsDataManageOpen(false)}
           onMarkExported={() => {
             const res = repo.markExported(store);
@@ -337,14 +470,30 @@ export function App({ repository, getTodayLocal }: AppProps = {}) {
             const res = repo.importFromJson(store, jsonText, byteLength, mode);
             if (!res.ok) return res.error;
             commitStore(res.data);
+            setOpenItemId(null);
             setActiveSheetId(
               resolveInitialDaySheetId(res.data.day_sheets, todayLocal),
             );
             return null;
           }}
-          onDeleteActiveSheet={handleDeleteSheet}
+          onRequestDeleteSheet={(sheet) =>
+            setPendingConfirm({ kind: 'delete-sheet', sheet })
+          }
+          onRequestResetDefault={() =>
+            setPendingConfirm({ kind: 'reset-default' })
+          }
+          onNotify={showToast}
         />
       )}
+
+      <ConfirmModal
+        isOpen={pendingConfirm !== null}
+        title={confirmDialogMeta?.title ?? ''}
+        message={confirmDialogMeta?.message ?? ''}
+        confirmLabel={confirmDialogMeta?.confirmLabel}
+        onCancel={() => setPendingConfirm(null)}
+        onConfirm={executeConfirmedAction}
+      />
     </div>
   );
 }

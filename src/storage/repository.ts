@@ -1,12 +1,16 @@
-import { getLocalDateString } from '../domain/dateUtils';
-import { getNextSortOrderForTime } from '../domain/sorting';
+import { parseBulkInputText } from '../domain/bulkParser';
+import { createLampungDefaultStore } from '../domain/seedData';
 import {
-  DEFAULT_NOTE_COLOR,
-  DEFAULT_TRIP_TITLE,
-  STORAGE_SCHEMA_VERSION,
-  type DaySheetRecord,
+  reorderArrayItem,
+  sortDaySheets,
+  sortItineraryItems,
+} from '../domain/sorting';
+import {
+  DEFAULT_STORAGE_KEY,
+  type DaySheet,
   type ImportMode,
-  type ItineraryItemRecord,
+  type ItineraryItem,
+  type NoteColor,
   type Result,
   type StickyPlanStoreV1,
 } from '../domain/types';
@@ -30,19 +34,23 @@ export type BootState =
 
 export interface ItineraryRepository {
   loadOrInitialize(): BootState;
-  resetSafeMode(): Result<StickyPlanStoreV1>;
+  resetToDefaultSeed(): Result<StickyPlanStoreV1>;
   updateTripTitle(
     store: StickyPlanStoreV1,
     rawTitle: unknown,
   ): Result<StickyPlanStoreV1>;
-  addDaySheet(
+  addOrSelectDaySheet(
     store: StickyPlanStoreV1,
     rawInput: unknown,
-  ): Result<StickyPlanStoreV1>;
-  updateDaySheet(
+  ): Result<{
+    store: StickyPlanStoreV1;
+    sheetId: string;
+    alreadyExisted: boolean;
+  }>;
+  updateDaySheetMeta(
     store: StickyPlanStoreV1,
     sheetId: string,
-    rawInput: unknown,
+    patch: { note_color?: NoteColor; day_summary?: string | null },
   ): Result<StickyPlanStoreV1>;
   deleteDaySheet(
     store: StickyPlanStoreV1,
@@ -52,15 +60,32 @@ export interface ItineraryRepository {
     store: StickyPlanStoreV1,
     daySheetId: string,
     rawInput: unknown,
-  ): Result<{ store: StickyPlanStoreV1; item: ItineraryItemRecord }>;
+  ): Result<{ store: StickyPlanStoreV1; item: ItineraryItem }>;
+  addBulkActivities(
+    store: StickyPlanStoreV1,
+    daySheetId: string,
+    rawBulkText: string,
+  ): Result<{ store: StickyPlanStoreV1; addedCount: number }>;
   updateActivity(
     store: StickyPlanStoreV1,
+    daySheetId: string,
     itemId: string,
     rawInput: unknown,
   ): Result<StickyPlanStoreV1>;
   deleteActivity(
     store: StickyPlanStoreV1,
+    daySheetId: string,
     itemId: string,
+  ): Result<StickyPlanStoreV1>;
+  reorderActivities(
+    store: StickyPlanStoreV1,
+    daySheetId: string,
+    fromIndex: number,
+    toIndex: number,
+  ): Result<StickyPlanStoreV1>;
+  sortSheetByTime(
+    store: StickyPlanStoreV1,
+    daySheetId: string,
   ): Result<StickyPlanStoreV1>;
   markExported(store: StickyPlanStoreV1): Result<StickyPlanStoreV1>;
   importFromJson(
@@ -73,8 +98,8 @@ export interface ItineraryRepository {
 
 export interface RepositoryOptions {
   storage?: StorageBackend;
-  namespace?: string;
-  getTodayLocal?: () => string;
+  storageKey?: string;
+  createSeedStore?: () => StickyPlanStoreV1;
   generateId?: () => string;
   getNowIso?: () => string;
 }
@@ -130,52 +155,11 @@ export function createLocalStorageRepository(
   options: RepositoryOptions = {},
 ): ItineraryRepository {
   const storage = options.storage ?? resolveDefaultStorage();
-  const envNamespace =
-    typeof import.meta !== 'undefined' &&
-    import.meta.env &&
-    typeof import.meta.env.VITE_STORAGE_NAMESPACE === 'string' &&
-    import.meta.env.VITE_STORAGE_NAMESPACE.trim().length > 0
-      ? import.meta.env.VITE_STORAGE_NAMESPACE.trim()
-      : 'stickyplan_v1';
-
-  const namespace = options.namespace ?? envNamespace;
-  const storeKey = `${namespace}:store`;
-  const corruptBackupKey = `${namespace}:corrupt_backup`;
-
-  const getToday = options.getTodayLocal ?? (() => getLocalDateString());
+  const storeKey = options.storageKey ?? DEFAULT_STORAGE_KEY;
+  const corruptBackupKey = `${storeKey}:corrupt_backup`;
+  const buildSeed = options.createSeedStore ?? createLampungDefaultStore;
   const generateId = options.generateId ?? (() => crypto.randomUUID());
   const getNowIso = options.getNowIso ?? (() => new Date().toISOString());
-
-  function buildSeedStore(): StickyPlanStoreV1 {
-    const nowIso = getNowIso();
-    const tripId = generateId();
-    const sheetId = generateId();
-
-    return {
-      schema_version: STORAGE_SCHEMA_VERSION,
-      active_trip_id: tripId,
-      last_exported_at: null,
-      trips: [
-        {
-          id: tripId,
-          title: DEFAULT_TRIP_TITLE,
-          schema_version: STORAGE_SCHEMA_VERSION,
-          created_at: nowIso,
-          updated_at: nowIso,
-        },
-      ],
-      day_sheets: [
-        {
-          id: sheetId,
-          trip_id: tripId,
-          date: getToday(),
-          note_color: DEFAULT_NOTE_COLOR,
-          day_summary: null,
-        },
-      ],
-      itinerary_items: [],
-    };
-  }
 
   function persistStore(
     nextStore: StickyPlanStoreV1,
@@ -191,7 +175,7 @@ export function createLocalStorageRepository(
           error: {
             code: 'QUOTA_EXCEEDED',
             message:
-              'Penyimpanan browser penuh. Segera unduh Backup JSON agar data perjalanan Anda tetap aman.',
+              'Penyimpanan browser penuh. Segera klik Export JSON agar jadwal tetap aman.',
           },
         };
       }
@@ -199,22 +183,25 @@ export function createLocalStorageRepository(
         ok: false,
         error: {
           code: 'STORAGE_WRITE_FAILED',
-          message:
-            'Gagal menyimpan perubahan ke penyimpanan perangkat. Coba matikan mode penyamaran penuh atau unduh Backup JSON.',
+          message: 'Gagal menyimpan perubahan ke penyimpanan lokal perangkat.',
         },
       };
     }
   }
 
-  function touchActiveTripTimestamp(
+  function withUpdatedTripTime(
     store: StickyPlanStoreV1,
-    nowIso: string,
-  ): StickyPlanStoreV1['trips'] {
-    return store.trips.map((trip) =>
-      trip.id === store.active_trip_id
-        ? { ...trip, updated_at: nowIso }
-        : trip,
-    );
+    patch: Partial<StickyPlanStoreV1>,
+  ): StickyPlanStoreV1 {
+    return {
+      ...store,
+      ...patch,
+      trip: {
+        ...store.trip,
+        ...(patch.trip ?? {}),
+        updated_at: getNowIso(),
+      },
+    };
   }
 
   return {
@@ -223,12 +210,31 @@ export function createLocalStorageRepository(
       try {
         raw = storage.getItem(storeKey);
       } catch {
-        const fallbackSeed = buildSeedStore();
-        return { status: 'ready', store: fallbackSeed };
+        return { status: 'ready', store: buildSeed() };
       }
 
       if (raw === null) {
-        const seed = buildSeedStore();
+        // Check if legacy v1 key has non-empty user items to preserve
+        try {
+          const legacyRaw = storage.getItem('stickyplan_v1:store');
+          if (legacyRaw) {
+            const migrated = parseAndValidateImportJson(
+              legacyRaw,
+              legacyRaw.length,
+            );
+            if (
+              migrated.ok &&
+              migrated.data.day_sheets.some((s) => s.items.length > 0)
+            ) {
+              persistStore(migrated.data);
+              return { status: 'ready', store: migrated.data };
+            }
+          }
+        } catch {
+          // Ignore legacy check errors and use clean default seed
+        }
+
+        const seed = buildSeed();
         persistStore(seed);
         return { status: 'ready', store: seed };
       }
@@ -238,7 +244,7 @@ export function createLocalStorageRepository(
         try {
           storage.setItem(corruptBackupKey, raw);
         } catch {
-          // Quarantine snapshot is best-effort when storage is full
+          // Best-effort quarantine
         }
         return {
           status: 'corrupt',
@@ -250,9 +256,8 @@ export function createLocalStorageRepository(
       return { status: 'ready', store: validated.data };
     },
 
-    resetSafeMode(): Result<StickyPlanStoreV1> {
-      const fresh = buildSeedStore();
-      return persistStore(fresh);
+    resetToDefaultSeed(): Result<StickyPlanStoreV1> {
+      return persistStore(buildSeed());
     },
 
     updateTripTitle(
@@ -262,61 +267,71 @@ export function createLocalStorageRepository(
       const titleRes = validateTripTitle(rawTitle);
       if (!titleRes.ok) return titleRes;
 
-      const nowIso = getNowIso();
-      const nextStore: StickyPlanStoreV1 = {
-        ...store,
-        trips: store.trips.map((trip) =>
-          trip.id === store.active_trip_id
-            ? { ...trip, title: titleRes.data, updated_at: nowIso }
-            : trip,
-        ),
-      };
-      return persistStore(nextStore);
+      return persistStore(
+        withUpdatedTripTime(store, {
+          trip: {
+            ...store.trip,
+            title: titleRes.data,
+            updated_at: getNowIso(),
+          },
+        }),
+      );
     },
 
-    addDaySheet(
+    addOrSelectDaySheet(
       store: StickyPlanStoreV1,
       rawInput: unknown,
-    ): Result<StickyPlanStoreV1> {
+    ): Result<{
+      store: StickyPlanStoreV1;
+      sheetId: string;
+      alreadyExisted: boolean;
+    }> {
       const dtoRes = validateDaySheetInput(rawInput);
       if (!dtoRes.ok) return dtoRes;
 
-      const duplicate = store.day_sheets.some(
-        (sheet) =>
-          sheet.trip_id === store.active_trip_id &&
-          sheet.date === dtoRes.data.date,
+      const existing = store.day_sheets.find(
+        (sheet) => sheet.date === dtoRes.data.date,
       );
-      if (duplicate) {
+      if (existing) {
         return {
-          ok: false,
-          error: {
-            code: 'DUPLICATE_DATE',
-            field: 'date',
-            message: 'Tanggal tersebut sudah terdaftar di perjalanan ini.',
+          ok: true,
+          data: {
+            store,
+            sheetId: existing.id,
+            alreadyExisted: true,
           },
         };
       }
 
-      const nowIso = getNowIso();
-      const newSheet: DaySheetRecord = {
+      const newSheet: DaySheet = {
         id: generateId(),
-        trip_id: store.active_trip_id,
         date: dtoRes.data.date,
         note_color: dtoRes.data.note_color,
         day_summary: dtoRes.data.day_summary,
+        items: [],
       };
 
-      return persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        day_sheets: [...store.day_sheets, newSheet],
-      });
+      const persisted = persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: sortDaySheets([...store.day_sheets, newSheet]),
+        }),
+      );
+      if (!persisted.ok) return persisted;
+
+      return {
+        ok: true,
+        data: {
+          store: persisted.data,
+          sheetId: newSheet.id,
+          alreadyExisted: false,
+        },
+      };
     },
 
-    updateDaySheet(
+    updateDaySheetMeta(
       store: StickyPlanStoreV1,
       sheetId: string,
-      rawInput: unknown,
+      patch: { note_color?: NoteColor; day_summary?: string | null },
     ): Result<StickyPlanStoreV1> {
       const target = store.day_sheets.find((s) => s.id === sheetId);
       if (!target) {
@@ -329,41 +344,29 @@ export function createLocalStorageRepository(
         };
       }
 
-      const dtoRes = validateDaySheetInput(rawInput);
+      const dtoRes = validateDaySheetInput({
+        date: target.date,
+        note_color: patch.note_color ?? target.note_color,
+        day_summary:
+          patch.day_summary !== undefined
+            ? patch.day_summary
+            : target.day_summary,
+      });
       if (!dtoRes.ok) return dtoRes;
 
-      const duplicate = store.day_sheets.some(
-        (s) =>
-          s.id !== sheetId &&
-          s.trip_id === target.trip_id &&
-          s.date === dtoRes.data.date,
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === sheetId
+              ? {
+                  ...s,
+                  note_color: dtoRes.data.note_color,
+                  day_summary: dtoRes.data.day_summary,
+                }
+              : s,
+          ),
+        }),
       );
-      if (duplicate) {
-        return {
-          ok: false,
-          error: {
-            code: 'DUPLICATE_DATE',
-            field: 'date',
-            message: 'Tanggal tersebut sudah terdaftar di perjalanan ini.',
-          },
-        };
-      }
-
-      const nowIso = getNowIso();
-      return persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        day_sheets: store.day_sheets.map((s) =>
-          s.id === sheetId
-            ? {
-                ...s,
-                date: dtoRes.data.date,
-                note_color: dtoRes.data.note_color,
-                day_summary: dtoRes.data.day_summary,
-              }
-            : s,
-        ),
-      });
     },
 
     deleteDaySheet(
@@ -381,24 +384,20 @@ export function createLocalStorageRepository(
         };
       }
 
-      const nowIso = getNowIso();
-      return persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        day_sheets: store.day_sheets.filter((s) => s.id !== sheetId),
-        itinerary_items: store.itinerary_items.filter(
-          (item) => item.day_sheet_id !== sheetId,
-        ),
-      });
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.filter((s) => s.id !== sheetId),
+        }),
+      );
     },
 
     addActivity(
       store: StickyPlanStoreV1,
       daySheetId: string,
       rawInput: unknown,
-    ): Result<{ store: StickyPlanStoreV1; item: ItineraryItemRecord }> {
-      const sheetExists = store.day_sheets.some((s) => s.id === daySheetId);
-      if (!sheetExists) {
+    ): Result<{ store: StickyPlanStoreV1; item: ItineraryItem }> {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet) {
         return {
           ok: false,
           error: {
@@ -411,43 +410,91 @@ export function createLocalStorageRepository(
       const dtoRes = validateActivityInput(rawInput);
       if (!dtoRes.ok) return dtoRes;
 
-      const sheetItems = store.itinerary_items.filter(
-        (item) => item.day_sheet_id === daySheetId,
-      );
-      const nextSortOrder = getNextSortOrderForTime(
-        sheetItems,
-        dtoRes.data.start_time,
-      );
-      const nowIso = getNowIso();
-
-      const newItem: ItineraryItemRecord = {
+      const newItem: ItineraryItem = {
         id: generateId(),
-        day_sheet_id: daySheetId,
         start_time: dtoRes.data.start_time,
         title: dtoRes.data.title,
         description: dtoRes.data.description,
         maps_url: dtoRes.data.maps_url,
-        sort_order: nextSortOrder,
-        created_at: nowIso,
       };
 
-      const persisted = persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        itinerary_items: [...store.itinerary_items, newItem],
-      });
+      const persisted = persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? { ...s, items: sortItineraryItems([...s.items, newItem]) }
+              : s,
+          ),
+        }),
+      );
       if (!persisted.ok) return persisted;
 
       return { ok: true, data: { store: persisted.data, item: newItem } };
     },
 
+    addBulkActivities(
+      store: StickyPlanStoreV1,
+      daySheetId: string,
+      rawBulkText: string,
+    ): Result<{ store: StickyPlanStoreV1; addedCount: number }> {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet) {
+        return {
+          ok: false,
+          error: {
+            code: 'SHEET_NOT_FOUND',
+            message: 'Lembar tanggal tujuan tidak ditemukan.',
+          },
+        };
+      }
+
+      const parsedDtos = parseBulkInputText(rawBulkText);
+      if (parsedDtos.length === 0) {
+        return {
+          ok: false,
+          error: {
+            code: 'EMPTY_BULK_INPUT',
+            message: 'Tidak ada baris kegiatan valid yang terdeteksi.',
+          },
+        };
+      }
+
+      const createdItems: ItineraryItem[] = parsedDtos.map((dto) => ({
+        id: generateId(),
+        start_time: dto.start_time,
+        title: dto.title,
+        description: dto.description,
+        maps_url: dto.maps_url,
+      }));
+
+      const persisted = persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? {
+                  ...s,
+                  items: sortItineraryItems([...s.items, ...createdItems]),
+                }
+              : s,
+          ),
+        }),
+      );
+      if (!persisted.ok) return persisted;
+
+      return {
+        ok: true,
+        data: { store: persisted.data, addedCount: createdItems.length },
+      };
+    },
+
     updateActivity(
       store: StickyPlanStoreV1,
+      daySheetId: string,
       itemId: string,
       rawInput: unknown,
     ): Result<StickyPlanStoreV1> {
-      const existing = store.itinerary_items.find((item) => item.id === itemId);
-      if (!existing) {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet || !sheet.items.some((i) => i.id === itemId)) {
         return {
           ok: false,
           error: {
@@ -460,40 +507,38 @@ export function createLocalStorageRepository(
       const dtoRes = validateActivityInput(rawInput);
       if (!dtoRes.ok) return dtoRes;
 
-      const siblingItems = store.itinerary_items.filter(
-        (item) =>
-          item.day_sheet_id === existing.day_sheet_id && item.id !== itemId,
+      // Per PRD v2.0 F3: editing an item preserves its custom position until "Urutkan Jam" is clicked
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? {
+                  ...s,
+                  items: s.items.map((item) =>
+                    item.id === itemId
+                      ? {
+                          ...item,
+                          start_time: dtoRes.data.start_time,
+                          title: dtoRes.data.title,
+                          description: dtoRes.data.description,
+                          maps_url: dtoRes.data.maps_url,
+                        }
+                      : item,
+                  ),
+                }
+              : s,
+          ),
+        }),
       );
-      const nextSortOrder =
-        existing.start_time === dtoRes.data.start_time
-          ? existing.sort_order
-          : getNextSortOrderForTime(siblingItems, dtoRes.data.start_time);
-
-      const nowIso = getNowIso();
-      return persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        itinerary_items: store.itinerary_items.map((item) =>
-          item.id === itemId
-            ? {
-                ...item,
-                start_time: dtoRes.data.start_time,
-                title: dtoRes.data.title,
-                description: dtoRes.data.description,
-                maps_url: dtoRes.data.maps_url,
-                sort_order: nextSortOrder,
-              }
-            : item,
-        ),
-      });
     },
 
     deleteActivity(
       store: StickyPlanStoreV1,
+      daySheetId: string,
       itemId: string,
     ): Result<StickyPlanStoreV1> {
-      const exists = store.itinerary_items.some((item) => item.id === itemId);
-      if (!exists) {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet || !sheet.items.some((i) => i.id === itemId)) {
         return {
           ok: false,
           error: {
@@ -503,14 +548,72 @@ export function createLocalStorageRepository(
         };
       }
 
-      const nowIso = getNowIso();
-      return persistStore({
-        ...store,
-        trips: touchActiveTripTimestamp(store, nowIso),
-        itinerary_items: store.itinerary_items.filter(
-          (item) => item.id !== itemId,
-        ),
-      });
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? { ...s, items: s.items.filter((i) => i.id !== itemId) }
+              : s,
+          ),
+        }),
+      );
+    },
+
+    reorderActivities(
+      store: StickyPlanStoreV1,
+      daySheetId: string,
+      fromIndex: number,
+      toIndex: number,
+    ): Result<StickyPlanStoreV1> {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet) {
+        return {
+          ok: false,
+          error: {
+            code: 'SHEET_NOT_FOUND',
+            message: 'Lembar tanggal tidak ditemukan.',
+          },
+        };
+      }
+
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? {
+                  ...s,
+                  items: reorderArrayItem(s.items, fromIndex, toIndex),
+                }
+              : s,
+          ),
+        }),
+      );
+    },
+
+    sortSheetByTime(
+      store: StickyPlanStoreV1,
+      daySheetId: string,
+    ): Result<StickyPlanStoreV1> {
+      const sheet = store.day_sheets.find((s) => s.id === daySheetId);
+      if (!sheet) {
+        return {
+          ok: false,
+          error: {
+            code: 'SHEET_NOT_FOUND',
+            message: 'Lembar tanggal tidak ditemukan.',
+          },
+        };
+      }
+
+      return persistStore(
+        withUpdatedTripTime(store, {
+          day_sheets: store.day_sheets.map((s) =>
+            s.id === daySheetId
+              ? { ...s, items: sortItineraryItems(s.items) }
+              : s,
+          ),
+        }),
+      );
     },
 
     markExported(store: StickyPlanStoreV1): Result<StickyPlanStoreV1> {
@@ -534,95 +637,64 @@ export function createLocalStorageRepository(
         return persistStore(imported);
       }
 
-      const activeTripId = currentStore.active_trip_id;
-      const importedTripId = imported.active_trip_id;
-      const importedSheets = imported.day_sheets.filter(
-        (s) => s.trip_id === importedTripId,
-      );
+      const mergedByDate = new Map<string, DaySheet>();
+      const existingItemIds = new Set<string>();
 
-      const mergedSheets = [...currentStore.day_sheets];
-      const sheetByDate = new Map<string, DaySheetRecord>();
-      for (const sheet of mergedSheets) {
-        if (sheet.trip_id === activeTripId) {
-          sheetByDate.set(sheet.date, sheet);
+      for (const sheet of currentStore.day_sheets) {
+        for (const item of sheet.items) {
+          existingItemIds.add(item.id);
         }
-      }
-
-      const importedToTargetSheetId = new Map<string, string>();
-      for (const impSheet of importedSheets) {
-        const existingSheet = sheetByDate.get(impSheet.date);
-        if (existingSheet) {
-          importedToTargetSheetId.set(impSheet.id, existingSheet.id);
-          if (!existingSheet.day_summary && impSheet.day_summary) {
-            const idx = mergedSheets.findIndex((s) => s.id === existingSheet.id);
-            if (idx !== -1) {
-              mergedSheets[idx] = {
-                ...existingSheet,
-                day_summary: impSheet.day_summary,
-              };
-            }
-          }
-        } else {
-          const newSheetId = mergedSheets.some((s) => s.id === impSheet.id)
-            ? generateId()
-            : impSheet.id;
-          const createdSheet: DaySheetRecord = {
-            id: newSheetId,
-            trip_id: activeTripId,
-            date: impSheet.date,
-            note_color: impSheet.note_color,
-            day_summary: impSheet.day_summary,
-          };
-          mergedSheets.push(createdSheet);
-          sheetByDate.set(impSheet.date, createdSheet);
-          importedToTargetSheetId.set(impSheet.id, newSheetId);
-        }
-      }
-
-      const mergedItems = [...currentStore.itinerary_items];
-      const existingItemIds = new Set(mergedItems.map((i) => i.id));
-
-      for (const impItem of imported.itinerary_items) {
-        const targetSheetId = importedToTargetSheetId.get(impItem.day_sheet_id);
-        if (!targetSheetId) continue;
-
-        const isExactDuplicate = mergedItems.some(
-          (item) =>
-            item.day_sheet_id === targetSheetId &&
-            item.start_time === impItem.start_time &&
-            item.title === impItem.title &&
-            item.description === impItem.description,
-        );
-        if (isExactDuplicate) continue;
-
-        const targetSheetItems = mergedItems.filter(
-          (item) => item.day_sheet_id === targetSheetId,
-        );
-        const nextOrder = getNextSortOrderForTime(
-          targetSheetItems,
-          impItem.start_time,
-        );
-        const nextId = existingItemIds.has(impItem.id)
-          ? generateId()
-          : impItem.id;
-        existingItemIds.add(nextId);
-
-        mergedItems.push({
-          ...impItem,
-          id: nextId,
-          day_sheet_id: targetSheetId,
-          sort_order: nextOrder,
+        mergedByDate.set(sheet.date, {
+          ...sheet,
+          items: [...sheet.items],
         });
       }
 
-      const candidateStore: StickyPlanStoreV1 = {
-        ...currentStore,
-        trips: touchActiveTripTimestamp(currentStore, getNowIso()),
-        day_sheets: mergedSheets,
-        itinerary_items: mergedItems,
-      };
+      for (const impSheet of imported.day_sheets) {
+        const target = mergedByDate.get(impSheet.date);
+        if (!target) {
+          const remappedItems = impSheet.items.map((it) => {
+            const id = existingItemIds.has(it.id) ? generateId() : it.id;
+            existingItemIds.add(id);
+            return { ...it, id };
+          });
+          mergedByDate.set(impSheet.date, {
+            id: mergedByDate.size > 0 ? generateId() : impSheet.id,
+            date: impSheet.date,
+            note_color: impSheet.note_color,
+            day_summary: impSheet.day_summary,
+            items: remappedItems,
+          });
+          continue;
+        }
 
-      const verified = validateStoreSnapshot(candidateStore);
+        if (!target.day_summary && impSheet.day_summary) {
+          target.day_summary = impSheet.day_summary;
+        }
+
+        for (const impItem of impSheet.items) {
+          const isDuplicate = target.items.some(
+            (existing) =>
+              existing.start_time === impItem.start_time &&
+              existing.title === impItem.title &&
+              existing.description === impItem.description,
+          );
+          if (isDuplicate) continue;
+
+          const id = existingItemIds.has(impItem.id)
+            ? generateId()
+            : impItem.id;
+          existingItemIds.add(id);
+          target.items.push({ ...impItem, id });
+        }
+        target.items = sortItineraryItems(target.items);
+      }
+
+      const candidate: StickyPlanStoreV1 = withUpdatedTripTime(currentStore, {
+        day_sheets: sortDaySheets([...mergedByDate.values()]),
+      });
+
+      const verified = validateStoreSnapshot(candidate);
       if (!verified.ok) return verified;
 
       return persistStore(verified.data);

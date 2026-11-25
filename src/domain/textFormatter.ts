@@ -1,29 +1,36 @@
 import { formatDateHeaderId } from './dateUtils';
-import { sortDaySheets, sortItineraryItems } from './sorting';
-import type { ItineraryItemRecord, StickyPlanStoreV1 } from './types';
+import { isAllowedGoogleMapsUrl } from './mapsUrl';
+import { sortDaySheets } from './sorting';
+import type { DaySheet, StickyPlanStoreV1 } from './types';
 
-export function formatTripAsPlainText(store: StickyPlanStoreV1): string {
-  const activeTrip =
-    store.trips.find((trip) => trip.id === store.active_trip_id) ??
-    store.trips[0];
+export function formatDaySheetAsPlainText(sheet: DaySheet): string {
+  const lines: string[] = [`*${formatDateHeaderId(sheet.date)}*`];
+  if (sheet.day_summary) {
+    lines.push(`_${sheet.day_summary}_`);
+  }
+  lines.push('');
 
-  if (!activeTrip) return '';
+  if (sheet.items.length === 0) {
+    lines.push('(Belum ada kegiatan)');
+    return lines.join('\n');
+  }
 
-  const sheets = sortDaySheets(
-    store.day_sheets.filter((sheet) => sheet.trip_id === activeTrip.id),
-  );
-
-  const itemsBySheetId = new Map<string, ItineraryItemRecord[]>();
-  for (const item of store.itinerary_items) {
-    const bucket = itemsBySheetId.get(item.day_sheet_id);
-    if (bucket) {
-      bucket.push(item);
-    } else {
-      itemsBySheetId.set(item.day_sheet_id, [item]);
+  for (const item of sheet.items) {
+    lines.push(`• ${item.start_time} - ${item.title}`);
+    if (item.description) {
+      lines.push(`  Catatan: ${item.description}`);
+    }
+    if (item.maps_url && isAllowedGoogleMapsUrl(item.maps_url)) {
+      lines.push(`  Maps: ${item.maps_url}`);
     }
   }
 
-  const lines: string[] = [`*${activeTrip.title}*`];
+  return lines.join('\n');
+}
+
+export function formatTripAsPlainText(store: StickyPlanStoreV1): string {
+  const sheets = sortDaySheets(store.day_sheets);
+  const lines: string[] = [`*${store.trip.title}*`];
 
   if (sheets.length === 0) {
     lines.push('Belum ada tanggal terjadwal.');
@@ -35,18 +42,17 @@ export function formatTripAsPlainText(store: StickyPlanStoreV1): string {
     const summaryPart = sheet.day_summary ? ` — ${sheet.day_summary}` : '';
     lines.push(`${formatDateHeaderId(sheet.date)}${summaryPart}`);
 
-    const sortedItems = sortItineraryItems(itemsBySheetId.get(sheet.id) ?? []);
-    if (sortedItems.length === 0) {
+    if (sheet.items.length === 0) {
       lines.push('  (Belum ada kegiatan)');
       continue;
     }
 
-    for (const item of sortedItems) {
+    for (const item of sheet.items) {
       lines.push(`${item.start_time} - ${item.title}`);
       if (item.description) {
         lines.push(`  Catatan: ${item.description}`);
       }
-      if (item.maps_url) {
+      if (item.maps_url && isAllowedGoogleMapsUrl(item.maps_url)) {
         lines.push(`  Maps: ${item.maps_url}`);
       }
     }

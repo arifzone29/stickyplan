@@ -1,4 +1,4 @@
-import type { DaySheetRecord } from './types';
+import type { DaySheet } from './types';
 import { sortDaySheets } from './sorting';
 
 const INDONESIAN_DAYS_FULL = [
@@ -9,16 +9,6 @@ const INDONESIAN_DAYS_FULL = [
   'Kamis',
   'Jumat',
   'Sabtu',
-] as const;
-
-const INDONESIAN_DAYS_SHORT = [
-  'Min',
-  'Sen',
-  'Sel',
-  'Rab',
-  'Kam',
-  'Jum',
-  'Sab',
 ] as const;
 
 const INDONESIAN_MONTHS_SHORT = [
@@ -55,6 +45,13 @@ export function getLocalDateString(date: Date = new Date()): string {
   const month = padTwoDigits(date.getMonth() + 1);
   const day = padTwoDigits(date.getDate());
   return `${year}-${month}-${day}`;
+}
+
+export function getNextCalendarDate(dateStr: string): string {
+  const parts = parseDateParts(dateStr);
+  if (!parts) return getLocalDateString();
+  const next = new Date(parts.year, parts.monthIndex, parts.day + 1);
+  return getLocalDateString(next);
 }
 
 function parseDateParts(dateStr: string): LocalDateParts | null {
@@ -97,14 +94,12 @@ export function formatDatePillId(dateStr: string): string {
   const parts = parseDateParts(dateStr);
   if (!parts) return dateStr;
 
-  const localDate = new Date(parts.year, parts.monthIndex, parts.day);
-  const dayShort = INDONESIAN_DAYS_SHORT[localDate.getDay()] ?? '';
   const monthName = INDONESIAN_MONTHS_SHORT[parts.monthIndex] ?? '';
-  return `${dayShort}, ${parts.day} ${monthName}`;
+  return `${parts.day} ${monthName}`;
 }
 
 export function resolveInitialDaySheetId(
-  sheets: readonly DaySheetRecord[],
+  sheets: readonly Pick<DaySheet, 'id' | 'date'>[],
   todayLocal: string = getLocalDateString(),
 ): string | null {
   if (sheets.length === 0) return null;

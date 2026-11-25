@@ -1,5 +1,6 @@
 import { isValidCalendarDate } from './dateUtils';
 import { isAllowedGoogleMapsUrl, parseSmartMapsInput } from './mapsUrl';
+import { sortDaySheets, sortItineraryItems } from './sorting';
 import {
   DEFAULT_NOTE_COLOR,
   MAX_ACTIVITY_DESCRIPTION_LENGTH,
@@ -10,19 +11,29 @@ import {
   NOTE_COLORS,
   STORAGE_SCHEMA_VERSION,
   type ActivityInputDto,
+  type DaySheet,
   type DaySheetInputDto,
-  type DaySheetRecord,
-  type ItineraryItemRecord,
+  type ItineraryItem,
   type NoteColor,
   type Result,
   type StickyPlanStoreV1,
-  type TripRecord,
 } from './types';
 
 const TIME_24H_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const RAW_PROTO_KEY_REGEX = /"(?:__proto__|constructor|prototype)"\s*:/;
 const MAX_ENTITY_COUNT = 5000;
+
+const LEGACY_COLOR_MAP: Record<string, NoteColor> = {
+  'warm-yellow': 'warm-yellow',
+  mint: 'mint',
+  'sage-mint': 'mint',
+  cream: 'cream',
+  'soft-cream': 'cream',
+  'soft-blue': 'soft-blue',
+  'sky-pale': 'soft-blue',
+  blue: 'soft-blue',
+};
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -51,10 +62,19 @@ function isValidIsoTimestamp(value: unknown): value is string {
 }
 
 function isNonEmptyId(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length >= 1 && value.length <= 128;
+  return (
+    typeof value === 'string' &&
+    value.trim().length >= 1 &&
+    value.length <= 128
+  );
 }
 
-function isNoteColor(value: unknown): value is NoteColor {
+export function normalizeNoteColor(value: unknown): NoteColor | null {
+  if (typeof value !== 'string') return null;
+  return LEGACY_COLOR_MAP[value.trim()] ?? null;
+}
+
+export function isNoteColor(value: unknown): value is NoteColor {
   return (
     typeof value === 'string' &&
     (NOTE_COLORS as readonly string[]).includes(value)
@@ -124,8 +144,10 @@ export function validateDaySheetInput(
     };
   }
 
-  const rawColor = rawInput.note_color ?? DEFAULT_NOTE_COLOR;
-  if (!isNoteColor(rawColor)) {
+  const resolvedColor = normalizeNoteColor(
+    rawInput.note_color ?? DEFAULT_NOTE_COLOR,
+  );
+  if (!resolvedColor) {
     return {
       ok: false,
       error: {
@@ -166,7 +188,7 @@ export function validateDaySheetInput(
     ok: true,
     data: {
       date: rawDate,
-      note_color: rawColor,
+      note_color: resolvedColor,
       day_summary: daySummary,
     },
   };
@@ -284,79 +306,8 @@ export function validateActivityInput(
   };
 }
 
-function parseTripRecord(raw: unknown): Result<TripRecord> {
+function parseImportedItem(raw: unknown): Result<ItineraryItem> {
   if (!isPlainRecord(raw) || !isNonEmptyId(raw.id)) {
-    return {
-      ok: false,
-      error: { code: 'INVALID_TRIP_RECORD', message: 'ID trip tidak valid.' },
-    };
-  }
-
-  const titleRes = validateTripTitle(raw.title);
-  if (!titleRes.ok) return titleRes;
-
-  if (
-    raw.schema_version !== STORAGE_SCHEMA_VERSION ||
-    !isValidIsoTimestamp(raw.created_at) ||
-    !isValidIsoTimestamp(raw.updated_at)
-  ) {
-    return {
-      ok: false,
-      error: {
-        code: 'INVALID_TRIP_METADATA',
-        message: 'Metadata waktu atau versi skema trip tidak valid.',
-      },
-    };
-  }
-
-  return {
-    ok: true,
-    data: {
-      id: raw.id.trim(),
-      title: titleRes.data,
-      schema_version: STORAGE_SCHEMA_VERSION,
-      created_at: raw.created_at,
-      updated_at: raw.updated_at,
-    },
-  };
-}
-
-function parseDaySheetRecord(raw: unknown): Result<DaySheetRecord> {
-  if (
-    !isPlainRecord(raw) ||
-    !isNonEmptyId(raw.id) ||
-    !isNonEmptyId(raw.trip_id)
-  ) {
-    return {
-      ok: false,
-      error: {
-        code: 'INVALID_SHEET_RECORD',
-        message: 'Identitas lembar tanggal tidak valid.',
-      },
-    };
-  }
-
-  const dtoRes = validateDaySheetInput(raw);
-  if (!dtoRes.ok) return dtoRes;
-
-  return {
-    ok: true,
-    data: {
-      id: raw.id.trim(),
-      trip_id: raw.trip_id.trim(),
-      date: dtoRes.data.date,
-      note_color: dtoRes.data.note_color,
-      day_summary: dtoRes.data.day_summary,
-    },
-  };
-}
-
-function parseItineraryItemRecord(raw: unknown): Result<ItineraryItemRecord> {
-  if (
-    !isPlainRecord(raw) ||
-    !isNonEmptyId(raw.id) ||
-    !isNonEmptyId(raw.day_sheet_id)
-  ) {
     return {
       ok: false,
       error: {
@@ -366,25 +317,43 @@ function parseItineraryItemRecord(raw: unknown): Result<ItineraryItemRecord> {
     };
   }
 
-  if (
-    typeof raw.sort_order !== 'number' ||
-    !Number.isInteger(raw.sort_order) ||
-    raw.sort_order < 0 ||
-    !isValidIsoTimestamp(raw.created_at)
-  ) {
+  const rawStartTime =
+    typeof raw.start_time === 'string' ? raw.start_time.trim() : '';
+  if (!TIME_24H_REGEX.test(rawStartTime)) {
     return {
       ok: false,
       error: {
-        code: 'INVALID_ITEM_METADATA',
-        message: 'Urutan atau waktu pembuatan kegiatan tidak valid.',
+        code: 'INVALID_ITEM_TIME',
+        message: 'Format jam di dalam file backup tidak valid.',
       },
     };
   }
 
+  const rawTitle =
+    typeof raw.title === 'string'
+      ? raw.title.trim().slice(0, MAX_ACTIVITY_TITLE_LENGTH)
+      : '';
+  if (rawTitle.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'EMPTY_ITEM_TITLE',
+        message: 'Ditemukan kegiatan tanpa judul di dalam file backup.',
+      },
+    };
+  }
+
+  const rawDesc =
+    typeof raw.description === 'string'
+      ? raw.description.trim().slice(0, MAX_ACTIVITY_DESCRIPTION_LENGTH)
+      : '';
+
+  let sanitizedMaps: string | null = null;
   if (raw.maps_url !== null && raw.maps_url !== undefined) {
     if (
       typeof raw.maps_url !== 'string' ||
-      !isAllowedGoogleMapsUrl(raw.maps_url.trim())
+      (raw.maps_url.trim().length > 0 &&
+        !isAllowedGoogleMapsUrl(raw.maps_url.trim()))
     ) {
       return {
         ok: false,
@@ -394,22 +363,123 @@ function parseItineraryItemRecord(raw: unknown): Result<ItineraryItemRecord> {
         },
       };
     }
+    sanitizedMaps = raw.maps_url.trim() || null;
   }
-
-  const dtoRes = validateActivityInput(raw);
-  if (!dtoRes.ok) return dtoRes;
 
   return {
     ok: true,
     data: {
       id: raw.id.trim(),
-      day_sheet_id: raw.day_sheet_id.trim(),
-      start_time: dtoRes.data.start_time,
-      title: dtoRes.data.title,
-      description: dtoRes.data.description,
-      maps_url: dtoRes.data.maps_url,
-      sort_order: raw.sort_order,
-      created_at: raw.created_at,
+      start_time: rawStartTime,
+      title: rawTitle,
+      description: rawDesc.length > 0 ? rawDesc : null,
+      maps_url: sanitizedMaps,
+    },
+  };
+}
+
+function convertLegacyFlatStore(
+  rawStore: Record<string, unknown>,
+): Result<StickyPlanStoreV1> {
+  if (
+    !Array.isArray(rawStore.trips) ||
+    rawStore.trips.length === 0 ||
+    !Array.isArray(rawStore.day_sheets) ||
+    !Array.isArray(rawStore.itinerary_items)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_LEGACY_STORE',
+        message: 'Koleksi data backup lama tidak lengkap.',
+      },
+    };
+  }
+
+  const activeTripId =
+    typeof rawStore.active_trip_id === 'string'
+      ? rawStore.active_trip_id.trim()
+      : '';
+  const rawTrip =
+    rawStore.trips.find(
+      (t) => isPlainRecord(t) && t.id === activeTripId,
+    ) ?? rawStore.trips[0];
+
+  if (!isPlainRecord(rawTrip) || !isNonEmptyId(rawTrip.id)) {
+    return {
+      ok: false,
+      error: { code: 'INVALID_TRIP', message: 'Data trip tidak valid.' },
+    };
+  }
+
+  const titleRes = validateTripTitle(rawTrip.title);
+  if (!titleRes.ok) return titleRes;
+
+  const sheetIdSet = new Set<string>();
+  const sheetsMap = new Map<string, DaySheet>();
+  for (const s of rawStore.day_sheets) {
+    if (!isPlainRecord(s) || !isNonEmptyId(s.id) || s.trip_id !== rawTrip.id) {
+      continue;
+    }
+    const dtoRes = validateDaySheetInput(s);
+    if (!dtoRes.ok) return dtoRes;
+    const id = s.id.trim();
+    sheetIdSet.add(id);
+    sheetsMap.set(id, {
+      id,
+      date: dtoRes.data.date,
+      note_color: dtoRes.data.note_color,
+      day_summary: dtoRes.data.day_summary,
+      items: [],
+    });
+  }
+
+  for (const rawIt of rawStore.itinerary_items) {
+    if (!isPlainRecord(rawIt) || typeof rawIt.day_sheet_id !== 'string') {
+      return {
+        ok: false,
+        error: { code: 'INVALID_ITEM', message: 'Item jadwal rusak.' },
+      };
+    }
+    const targetSheet = sheetsMap.get(rawIt.day_sheet_id.trim());
+    if (!targetSheet) {
+      return {
+        ok: false,
+        error: {
+          code: 'ORPHAN_ITINERARY_ITEM',
+          message: 'Ditemukan kegiatan yang merujuk ke tanggal yang tidak ada.',
+        },
+      };
+    }
+    const parsedItem = parseImportedItem(rawIt);
+    if (!parsedItem.ok) return parsedItem;
+    targetSheet.items.push(parsedItem.data);
+  }
+
+  const sheets = sortDaySheets([...sheetsMap.values()]).map((sheet) => ({
+    ...sheet,
+    items: sortItineraryItems(sheet.items),
+  }));
+
+  const nowIso = new Date().toISOString();
+  return {
+    ok: true,
+    data: {
+      schema_version: STORAGE_SCHEMA_VERSION,
+      last_exported_at: isValidIsoTimestamp(rawStore.last_exported_at)
+        ? rawStore.last_exported_at
+        : null,
+      trip: {
+        id: rawTrip.id.trim(),
+        title: titleRes.data,
+        created_at: isValidIsoTimestamp(rawTrip.created_at)
+          ? rawTrip.created_at
+          : nowIso,
+        updated_at: isValidIsoTimestamp(rawTrip.updated_at)
+          ? rawTrip.updated_at
+          : nowIso,
+      },
+      day_sheets: sheets,
     },
   };
 }
@@ -422,12 +492,14 @@ export function validateStoreSnapshot(
       ok: false,
       error: {
         code: 'INVALID_STORE_ROOT',
-        message: 'Struktur penyimpanan utama rusak atau mengandung kunci terlarang.',
+        message:
+          'Struktur penyimpanan utama rusak atau mengandung kunci terlarang.',
       },
     };
   }
 
-  if (rawStore.schema_version !== STORAGE_SCHEMA_VERSION) {
+  const schemaVersion = rawStore.schema_version ?? STORAGE_SCHEMA_VERSION;
+  if (schemaVersion !== STORAGE_SCHEMA_VERSION) {
     return {
       ok: false,
       error: {
@@ -437,129 +509,134 @@ export function validateStoreSnapshot(
     };
   }
 
-  if (
-    !Array.isArray(rawStore.trips) ||
-    rawStore.trips.length === 0 ||
-    rawStore.trips.length > MAX_ENTITY_COUNT ||
-    !Array.isArray(rawStore.day_sheets) ||
-    rawStore.day_sheets.length > MAX_ENTITY_COUNT ||
-    !Array.isArray(rawStore.itinerary_items) ||
-    rawStore.itinerary_items.length > MAX_ENTITY_COUNT
-  ) {
+  if (!isPlainRecord(rawStore.trip) && Array.isArray(rawStore.trips)) {
+    return convertLegacyFlatStore(rawStore);
+  }
+
+  if (!isPlainRecord(rawStore.trip) || !Array.isArray(rawStore.day_sheets)) {
     return {
       ok: false,
       error: {
         code: 'INVALID_COLLECTIONS',
-        message: 'Koleksi trip, tanggal, atau kegiatan tidak lengkap atau melebihi batas aman.',
+        message: 'Data trip atau daftar lembar tanggal tidak ditemukan.',
       },
     };
   }
 
-  const lastExportedAt = rawStore.last_exported_at ?? null;
-  if (lastExportedAt !== null && !isValidIsoTimestamp(lastExportedAt)) {
+  if (rawStore.day_sheets.length > MAX_ENTITY_COUNT) {
     return {
       ok: false,
       error: {
-        code: 'INVALID_EXPORT_TIMESTAMP',
-        message: ' penanda waktu backup terakhir tidak valid.',
+        code: 'TOO_MANY_SHEETS',
+        message: 'Jumlah tanggal melebihi batas aman.',
       },
     };
   }
 
-  const trips: TripRecord[] = [];
-  const tripIds = new Set<string>();
-  for (const rawTrip of rawStore.trips) {
-    const tripRes = parseTripRecord(rawTrip);
-    if (!tripRes.ok) return tripRes;
-    if (tripIds.has(tripRes.data.id)) {
-      return {
-        ok: false,
-        error: { code: 'DUPLICATE_TRIP_ID', message: 'Ditemukan ID trip ganda.' },
-      };
-    }
-    tripIds.add(tripRes.data.id);
-    trips.push(tripRes.data);
-  }
+  const rawTrip = rawStore.trip;
+  const tripId = isNonEmptyId(rawTrip.id) ? rawTrip.id.trim() : 'trip-default';
+  const titleRes = validateTripTitle(rawTrip.title);
+  if (!titleRes.ok) return titleRes;
 
-  if (
-    !isNonEmptyId(rawStore.active_trip_id) ||
-    !tripIds.has(rawStore.active_trip_id.trim())
-  ) {
-    return {
-      ok: false,
-      error: {
-        code: 'MISSING_ACTIVE_TRIP',
-        message: 'Trip aktif tidak ditemukan di dalam daftar trip.',
-      },
-    };
-  }
+  const nowIso = new Date().toISOString();
+  const createdAt = isValidIsoTimestamp(rawTrip.created_at)
+    ? rawTrip.created_at
+    : nowIso;
+  const updatedAt = isValidIsoTimestamp(rawTrip.updated_at)
+    ? rawTrip.updated_at
+    : nowIso;
 
-  const daySheets: DaySheetRecord[] = [];
-  const sheetIds = new Set<string>();
-  const tripDatePairs = new Set<string>();
+  const seenDates = new Set<string>();
+  const seenSheetIds = new Set<string>();
+  const seenItemIds = new Set<string>();
+  const daySheets: DaySheet[] = [];
+
   for (const rawSheet of rawStore.day_sheets) {
-    const sheetRes = parseDaySheetRecord(rawSheet);
-    if (!sheetRes.ok) return sheetRes;
-    if (!tripIds.has(sheetRes.data.trip_id)) {
+    if (
+      !isPlainRecord(rawSheet) ||
+      !isNonEmptyId(rawSheet.id) ||
+      !Array.isArray(rawSheet.items)
+    ) {
       return {
         ok: false,
         error: {
-          code: 'ORPHAN_DAY_SHEET',
-          message: 'Ditemukan lembar tanggal tanpa referensi trip yang sah.',
+          code: 'INVALID_SHEET_RECORD',
+          message: 'Struktur lembar tanggal tidak valid.',
         },
       };
     }
-    const pairKey = `${sheetRes.data.trip_id}::${sheetRes.data.date}`;
-    if (sheetIds.has(sheetRes.data.id) || tripDatePairs.has(pairKey)) {
+
+    if (rawSheet.items.length > MAX_ENTITY_COUNT) {
+      return {
+        ok: false,
+        error: {
+          code: 'TOO_MANY_ITEMS',
+          message: 'Jumlah kegiatan pada satu hari melebihi batas aman.',
+        },
+      };
+    }
+
+    const dtoRes = validateDaySheetInput(rawSheet);
+    if (!dtoRes.ok) return dtoRes;
+
+    const sheetId = rawSheet.id.trim();
+    if (seenSheetIds.has(sheetId) || seenDates.has(dtoRes.data.date)) {
       return {
         ok: false,
         error: {
           code: 'DUPLICATE_DAY_SHEET',
-          message: `Tanggal ${sheetRes.data.date} tercatat ganda dalam trip yang sama.`,
+          message: `Tanggal ${dtoRes.data.date} tercatat ganda di dalam file.`,
         },
       };
     }
-    sheetIds.add(sheetRes.data.id);
-    tripDatePairs.add(pairKey);
-    daySheets.push(sheetRes.data);
+    seenSheetIds.add(sheetId);
+    seenDates.add(dtoRes.data.date);
+
+    const parsedItems: ItineraryItem[] = [];
+    for (const rawItem of rawSheet.items) {
+      const itemRes = parseImportedItem(rawItem);
+      if (!itemRes.ok) return itemRes;
+      if (seenItemIds.has(itemRes.data.id)) {
+        return {
+          ok: false,
+          error: {
+            code: 'DUPLICATE_ITEM_ID',
+            message: 'Ditemukan ID kegiatan ganda di dalam file.',
+          },
+        };
+      }
+      seenItemIds.add(itemRes.data.id);
+      parsedItems.push(itemRes.data);
+    }
+
+    daySheets.push({
+      id: sheetId,
+      date: dtoRes.data.date,
+      note_color: dtoRes.data.note_color,
+      day_summary: dtoRes.data.day_summary,
+      items: parsedItems,
+    });
   }
 
-  const items: ItineraryItemRecord[] = [];
-  const itemIds = new Set<string>();
-  for (const rawItem of rawStore.itinerary_items) {
-    const itemRes = parseItineraryItemRecord(rawItem);
-    if (!itemRes.ok) return itemRes;
-    if (!sheetIds.has(itemRes.data.day_sheet_id)) {
-      return {
-        ok: false,
-        error: {
-          code: 'ORPHAN_ITINERARY_ITEM',
-          message: 'Ditemukan kegiatan yang merujuk ke tanggal yang tidak ada.',
-        },
-      };
-    }
-    if (itemIds.has(itemRes.data.id)) {
-      return {
-        ok: false,
-        error: {
-          code: 'DUPLICATE_ITEM_ID',
-          message: 'Ditemukan ID kegiatan ganda di dalam data.',
-        },
-      };
-    }
-    itemIds.add(itemRes.data.id);
-    items.push(itemRes.data);
-  }
+  const lastExportedAt =
+    rawStore.last_exported_at === null || rawStore.last_exported_at === undefined
+      ? null
+      : isValidIsoTimestamp(rawStore.last_exported_at)
+        ? rawStore.last_exported_at
+        : null;
 
   return {
     ok: true,
     data: {
       schema_version: STORAGE_SCHEMA_VERSION,
-      active_trip_id: rawStore.active_trip_id.trim(),
       last_exported_at: lastExportedAt,
-      trips,
-      day_sheets: daySheets,
-      itinerary_items: items,
+      trip: {
+        id: tripId,
+        title: titleRes.data,
+        created_at: createdAt,
+        updated_at: updatedAt,
+      },
+      day_sheets: sortDaySheets(daySheets),
     },
   };
 }

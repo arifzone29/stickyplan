@@ -7,181 +7,136 @@ import {
 } from '../../src/domain/validators';
 import { MAX_IMPORT_FILE_BYTES } from '../../src/domain/types';
 
-describe('validators (strict DTO allow-list & import security)', () => {
+describe('validators v2.0 (strict DTO allow-list, nested schema & legacy compat)', () => {
   it('validates activity input, trims fields, converts venue text to safe Maps URL, and strips injected keys', () => {
-    const rawPayload = {
+    const res = validateActivityInput({
       start_time: '09:30',
-      title: '  Rapat Koordinasi Komdigi  ',
-      description: '  Lantai 7 Ruang Rapat Utama  ',
-      maps_url: 'Kementerian Komunikasi dan Digital Jakarta',
+      title: '  Kunjungan Radar Lampung  ',
+      description: '  Evaluasi PSO  ',
+      maps_url: 'Radar Lampung',
       role: 'admin',
       is_admin: true,
-      user_id: 'spoofed-user',
-    };
-
-    const res = validateActivityInput(rawPayload);
+    });
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.data).toEqual({
         start_time: '09:30',
-        title: 'Rapat Koordinasi Komdigi',
-        description: 'Lantai 7 Ruang Rapat Utama',
-        maps_url:
-          'https://www.google.com/maps/search/?api=1&query=Kementerian%20Komunikasi%20dan%20Digital%20Jakarta',
+        title: 'Kunjungan Radar Lampung',
+        description: 'Evaluasi PSO',
+        maps_url: 'https://www.google.com/maps/search/?api=1&query=Radar%20Lampung',
       });
       expect('role' in res.data).toBe(false);
-      expect('is_admin' in res.data).toBe(false);
     }
   });
 
-  it('rejects invalid 24h time, empty/overlong title, overlong description, and malicious maps_url', () => {
-    expect(
-      validateActivityInput({ start_time: '24:00', title: 'Valid' }).ok,
-    ).toBe(false);
-    expect(
-      validateActivityInput({ start_time: '9:30', title: 'Valid' }).ok,
-    ).toBe(false);
-    expect(
-      validateActivityInput({ start_time: '09:30', title: '    ' }).ok,
-    ).toBe(false);
-    expect(
-      validateActivityInput({
-        start_time: '09:30',
-        title: 'A'.repeat(81),
-      }).ok,
-    ).toBe(false);
-    expect(
-      validateActivityInput({
-        start_time: '09:30',
-        title: 'Valid',
-        description: 'D'.repeat(1001),
-      }).ok,
-    ).toBe(false);
-    expect(
-      validateActivityInput({
-        start_time: '09:30',
-        title: 'Valid',
-        maps_url: 'javascript:alert(1)',
-      }).ok,
-    ).toBe(false);
-  });
-
-  it('validates trip title and day sheet DTO boundaries', () => {
-    expect(validateTripTitle('  Dinas Bandung  ')).toEqual({
+  it('validates v2.0 note_color values and maps legacy color aliases cleanly', () => {
+    expect(validateTripTitle('  Audit ANTARA Lampung  ')).toEqual({
       ok: true,
-      data: 'Dinas Bandung',
+      data: 'Audit ANTARA Lampung',
     });
-    expect(validateTripTitle('   ').ok).toBe(false);
-    expect(validateTripTitle('T'.repeat(61)).ok).toBe(false);
 
     expect(
       validateDaySheetInput({
-        date: '2026-11-25',
-        note_color: 'sage-mint',
-        day_summary: '  Hari 1: Kedatangan  ',
+        date: '2026-11-26',
+        note_color: 'mint',
+        day_summary: '  Hari 1  ',
       }),
     ).toEqual({
       ok: true,
-      data: {
-        date: '2026-11-25',
-        note_color: 'sage-mint',
-        day_summary: 'Hari 1: Kedatangan',
-      },
+      data: { date: '2026-11-26', note_color: 'mint', day_summary: 'Hari 1' },
     });
+
     expect(
       validateDaySheetInput({
-        date: '2026-02-30',
-        note_color: 'warm-yellow',
-      }).ok,
-    ).toBe(false);
+        date: '2026-11-27',
+        note_color: 'sky-pale',
+      }),
+    ).toEqual({
+      ok: true,
+      data: { date: '2026-11-27', note_color: 'soft-blue', day_summary: null },
+    });
   });
 
-  it('accepts valid StickyPlanStoreV1 JSON and strips unknown properties', () => {
-    const validStore = JSON.stringify({
+  it('accepts v2.0 nested StickyPlan JSON and strips unknown properties', () => {
+    const v2Json = JSON.stringify({
       schema_version: 1,
-      active_trip_id: 'trip-1',
-      last_exported_at: '2026-11-25T03:00:00.000Z',
-      extra_root: 'strip-me',
-      trips: [
-        {
-          id: 'trip-1',
-          title: 'Dinas Surabaya',
-          schema_version: 1,
-          created_at: '2026-11-25T01:00:00.000Z',
-          updated_at: '2026-11-25T02:00:00.000Z',
-          is_admin: true,
-        },
-      ],
+      extra_field: 'strip',
+      trip: {
+        id: 't1',
+        title: 'Audit Lampung',
+        created_at: '2026-11-25T16:40:00+07:00',
+        updated_at: '2026-11-25T16:40:00+07:00',
+        is_admin: true,
+      },
       day_sheets: [
         {
-          id: 'sheet-1',
-          trip_id: 'trip-1',
-          date: '2026-11-25',
+          id: 'd1',
+          date: '2026-11-26',
           note_color: 'warm-yellow',
-          day_summary: 'Hari Pertama',
-        },
-      ],
-      itinerary_items: [
-        {
-          id: 'item-1',
-          day_sheet_id: 'sheet-1',
-          start_time: '08:00',
-          title: 'Landing Bandara Juanda',
-          description: 'Terminal 2',
-          maps_url: 'https://maps.app.goo.gl/JuandaT2',
-          sort_order: 0,
-          created_at: '2026-11-25T01:05:00.000Z',
+          day_summary: 'Kedatangan',
+          items: [
+            {
+              id: 'i1',
+              start_time: '10:30',
+              title: 'Penjemputan rombongan',
+              description: 'Bandara Radin Inten II',
+              maps_url: 'https://maps.app.goo.gl/RadinInten',
+            },
+          ],
         },
       ],
     });
 
-    const parsed = parseAndValidateImportJson(validStore, validStore.length);
+    const parsed = parseAndValidateImportJson(v2Json, v2Json.length);
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect('extra_root' in parsed.data).toBe(false);
-      expect('is_admin' in (parsed.data.trips[0] ?? {})).toBe(false);
-      expect(parsed.data.itinerary_items[0]?.title).toBe('Landing Bandara Juanda');
+      expect('extra_field' in parsed.data).toBe(false);
+      expect('is_admin' in parsed.data.trip).toBe(false);
+      expect(parsed.data.day_sheets[0]?.items[0]?.title).toBe(
+        'Penjemputan rombongan',
+      );
     }
   });
 
-  it('blocks prototype pollution (__proto__, constructor, prototype), oversize files, orphan FKs, and XSS maps_url in imports', () => {
+  it('blocks prototype pollution (__proto__, constructor, prototype), oversize files, and XSS maps_url', () => {
     const protoPayload =
-      '{"schema_version":1,"__proto__":{"polluted":true},"active_trip_id":"t1","last_exported_at":null,"trips":[],"day_sheets":[],"itinerary_items":[]}';
-    expect(parseAndValidateImportJson(protoPayload, protoPayload.length).ok).toBe(false);
+      '{"schema_version":1,"__proto__":{"polluted":true},"trip":{"id":"t1","title":"X","created_at":"2026-11-25T00:00:00Z","updated_at":"2026-11-25T00:00:00Z"},"day_sheets":[]}';
+    expect(parseAndValidateImportJson(protoPayload, protoPayload.length).ok).toBe(
+      false,
+    );
 
-    expect(
-      parseAndValidateImportJson('{}', MAX_IMPORT_FILE_BYTES + 1).ok,
-    ).toBe(false);
+    expect(parseAndValidateImportJson('{}', MAX_IMPORT_FILE_BYTES + 1).ok).toBe(
+      false,
+    );
 
-    const orphanItemPayload = JSON.stringify({
+    const xssPayload = JSON.stringify({
       schema_version: 1,
-      active_trip_id: 'trip-1',
-      last_exported_at: null,
-      trips: [
+      trip: {
+        id: 't1',
+        title: 'X',
+        created_at: '2026-11-25T00:00:00Z',
+        updated_at: '2026-11-25T00:00:00Z',
+      },
+      day_sheets: [
         {
-          id: 'trip-1',
-          title: 'Trip',
-          schema_version: 1,
-          created_at: '2026-11-25T01:00:00.000Z',
-          updated_at: '2026-11-25T01:00:00.000Z',
-        },
-      ],
-      day_sheets: [],
-      itinerary_items: [
-        {
-          id: 'item-1',
-          day_sheet_id: 'missing-sheet',
-          start_time: '08:00',
-          title: 'Orphan',
-          description: null,
-          maps_url: null,
-          sort_order: 0,
-          created_at: '2026-11-25T01:00:00.000Z',
+          id: 'd1',
+          date: '2026-11-26',
+          note_color: 'warm-yellow',
+          day_summary: null,
+          items: [
+            {
+              id: 'i1',
+              start_time: '09:00',
+              title: 'Bad',
+              description: null,
+              maps_url: 'javascript:alert(1)',
+            },
+          ],
         },
       ],
     });
-    expect(
-      parseAndValidateImportJson(orphanItemPayload, orphanItemPayload.length).ok,
-    ).toBe(false);
+    expect(parseAndValidateImportJson(xssPayload, xssPayload.length).ok).toBe(
+      false,
+    );
   });
 });

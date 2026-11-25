@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { formatDatePillId } from '../domain/dateUtils';
+import { formatDatePillId, getNextCalendarDate } from '../domain/dateUtils';
 import {
   DEFAULT_NOTE_COLOR,
   MAX_DAY_SUMMARY_LENGTH,
+  type DaySheet,
   type DaySheetInputDto,
-  type DaySheetRecord,
   type NoteColor,
 } from '../domain/types';
 import { PlusIcon } from './Icons';
 import { ModalSheet } from './ModalSheet';
 
 interface DatePillStripProps {
-  sheets: readonly DaySheetRecord[];
+  sheets: readonly DaySheet[];
   activeSheetId: string | null;
   todayLocal: string;
   onSelectSheet: (sheetId: string) => void;
@@ -23,10 +23,10 @@ const NOTE_COLOR_OPTIONS: ReadonlyArray<{
   label: string;
   swatch: string;
 }> = [
-  { value: 'warm-yellow', label: 'Kuning Kertas', swatch: '#FFFBEB' },
-  { value: 'soft-cream', label: 'Krem Hangat', swatch: '#FAF6EE' },
-  { value: 'sage-mint', label: 'Hijau Mint', swatch: '#ECFDF5' },
-  { value: 'sky-pale', label: 'Biru Langit', swatch: '#F0F9FF' },
+  { value: 'warm-yellow', label: 'Kuning Kertas', swatch: '#FEFCE8' },
+  { value: 'mint', label: 'Mint Lembut', swatch: '#ECFDF5' },
+  { value: 'cream', label: 'Krem Hangat', swatch: '#FAF5F0' },
+  { value: 'soft-blue', label: 'Biru Muda', swatch: '#EFF6FF' },
 ];
 
 export function DatePillStrip({
@@ -59,20 +59,7 @@ export function DatePillStrip({
 
   function openAddSheet(): void {
     const lastSheet = sheets[sheets.length - 1];
-    if (lastSheet) {
-      const parts = lastSheet.date.split('-').map(Number);
-      if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
-        const nextDay = new Date(parts[0], parts[1] - 1, parts[2] + 1);
-        const yyyy = nextDay.getFullYear();
-        const mm = String(nextDay.getMonth() + 1).padStart(2, '0');
-        const dd = String(nextDay.getDate()).padStart(2, '0');
-        setDateVal(`${yyyy}-${mm}-${dd}`);
-      } else {
-        setDateVal(todayLocal);
-      }
-    } else {
-      setDateVal(todayLocal);
-    }
+    setDateVal(lastSheet ? getNextCalendarDate(lastSheet.date) : todayLocal);
     setNoteColor(DEFAULT_NOTE_COLOR);
     setDaySummary('');
     setErrorMsg(null);
@@ -98,9 +85,9 @@ export function DatePillStrip({
     <nav
       aria-label="Navigasi tanggal perjalanan"
       data-no-swipe
-      className="w-full max-w-[460px] mx-auto px-3 pb-2"
+      className="px-4 py-2.5"
     >
-      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
         {sheets.map((sheet) => {
           const isActive = sheet.id === activeSheetId;
           const isToday = sheet.date === todayLocal;
@@ -111,17 +98,17 @@ export function DatePillStrip({
               type="button"
               aria-current={isActive ? 'date' : undefined}
               onClick={() => onSelectSheet(sheet.id)}
-              className={`shrink-0 inline-flex min-h-[44px] items-center gap-1.5 rounded-[10px] px-3.5 text-[14px] font-medium transition-colors ${
+              className={`shrink-0 inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-3.5 text-xs font-bold transition-all active:scale-95 ${
                 isActive
-                  ? 'bg-[#1C1917] text-[#FFFBEB]'
-                  : 'border border-[#D6CFC2] bg-[var(--surface-sheet)] text-[var(--ink-primary)] hover:bg-[#EAE4D9]'
+                  ? 'bg-stone-900 text-white shadow-sm'
+                  : 'border border-stone-200 bg-white text-stone-600 hover:bg-stone-100'
               }`}
             >
               <span>{formatDatePillId(sheet.date)}</span>
               {isToday && (
                 <span
                   className={`h-1.5 w-1.5 rounded-full ${
-                    isActive ? 'bg-[#F59E0B]' : 'bg-[var(--accent-primary)]'
+                    isActive ? 'bg-amber-400' : 'bg-emerald-600'
                   }`}
                   title="Hari ini"
                 />
@@ -134,9 +121,9 @@ export function DatePillStrip({
           type="button"
           onClick={openAddSheet}
           aria-label="Tambah Tanggal"
-          className="shrink-0 inline-flex min-h-[44px] items-center gap-1.5 rounded-[10px] border border-dashed border-[#A8A092] bg-transparent px-3 text-[14px] font-medium text-[var(--ink-primary)] hover:bg-[#E7E2D8]"
+          className="shrink-0 inline-flex min-h-[40px] items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-3.5 text-xs font-bold text-amber-900 hover:bg-amber-200/70 active:scale-95 transition-all"
         >
-          <PlusIcon className="w-4 h-4" />
+          <PlusIcon className="w-3.5 h-3.5" />
           <span>Tanggal</span>
         </button>
       </div>
@@ -150,7 +137,7 @@ export function DatePillStrip({
           <div className="flex flex-col gap-1">
             <label
               htmlFor="new-sheet-date"
-              className="text-[14px] font-medium text-[var(--ink-primary)]"
+              className="text-xs font-bold text-stone-700"
             >
               Pilih Tanggal <span aria-hidden="true">*</span>
             </label>
@@ -167,43 +154,43 @@ export function DatePillStrip({
                 setDateVal((e.target as HTMLInputElement).value);
                 if (errorMsg) setErrorMsg(null);
               }}
-              className="w-full rounded-[10px] border border-[#BFB8AA] bg-white px-3 text-[var(--ink-primary)]"
+              className="w-full rounded-xl border border-stone-300 bg-white px-3 text-stone-900"
             />
           </div>
 
           <div className="flex flex-col gap-1">
             <label
               htmlFor="new-sheet-summary"
-              className="text-[14px] font-medium text-[var(--ink-primary)]"
+              className="text-xs font-bold text-stone-700"
             >
-              Catatan Singkat Hari (Opsional)
+              Ringkasan Hari (Opsional)
             </label>
             <input
               id="new-sheet-summary"
               name="day_summary"
               type="text"
               maxLength={MAX_DAY_SUMMARY_LENGTH}
-              placeholder="Contoh: Hari 2 — Rapat & Kepulangan"
+              placeholder="Contoh: Hari 3 — Kepulangan ke Jakarta"
               value={daySummary}
               onInput={(e) =>
                 setDaySummary((e.target as HTMLInputElement).value)
               }
-              className="w-full rounded-[10px] border border-[#BFB8AA] bg-white px-3 text-[var(--ink-primary)]"
+              className="w-full rounded-xl border border-stone-300 bg-white px-3 text-stone-900"
             />
           </div>
 
           <fieldset className="border-0 p-0 m-0">
-            <legend className="text-[14px] font-medium text-[var(--ink-primary)] mb-2">
+            <legend className="text-xs font-bold text-stone-700 mb-2">
               Warna Kertas Sticky
             </legend>
             <div className="grid grid-cols-2 gap-2">
               {NOTE_COLOR_OPTIONS.map((opt) => (
                 <label
                   key={opt.value}
-                  className={`flex min-h-[44px] items-center gap-2 rounded-[10px] border px-3 py-2 text-[14px] cursor-pointer ${
+                  className={`flex min-h-[44px] items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold cursor-pointer ${
                     noteColor === opt.value
-                      ? 'border-[var(--accent-primary)] ring-1 ring-[var(--accent-primary)] font-medium'
-                      : 'border-[#D6CFC2]'
+                      ? 'border-stone-900 ring-1 ring-stone-900 text-stone-900'
+                      : 'border-stone-200 text-stone-600'
                   }`}
                   style={{ backgroundColor: opt.swatch }}
                 >
@@ -213,7 +200,7 @@ export function DatePillStrip({
                     value={opt.value}
                     checked={noteColor === opt.value}
                     onChange={() => setNoteColor(opt.value)}
-                    className="accent-[#0F766E] w-4 h-4"
+                    className="accent-stone-900 w-4 h-4"
                   />
                   <span>{opt.label}</span>
                 </label>
@@ -225,23 +212,23 @@ export function DatePillStrip({
             <p
               id="new-sheet-error"
               role="alert"
-              className="text-[14px] font-medium text-[var(--danger)] m-0"
+              className="text-xs font-bold text-red-600 m-0"
             >
               {errorMsg}
             </p>
           )}
 
-          <div className="flex items-center justify-end gap-2 pt-1">
+          <div className="flex items-center gap-2 pt-1">
             <button
               type="button"
               onClick={() => setIsAddOpen(false)}
-              className="min-h-[48px] rounded-[10px] border border-[#D6CFC2] px-4 text-[15px] font-medium text-[var(--ink-secondary)]"
+              className="min-h-[46px] rounded-xl bg-stone-100 px-4 text-xs font-bold text-stone-700 hover:bg-stone-200"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="min-h-[48px] flex-1 rounded-[10px] bg-[var(--accent-primary)] px-4 text-[15px] font-medium text-white hover:bg-[var(--accent-primary-hover)]"
+              className="min-h-[46px] flex-1 rounded-xl bg-stone-900 px-4 text-sm font-bold text-white hover:bg-stone-800 active:scale-[0.99] transition-transform"
             >
               Tambah Tanggal
             </button>

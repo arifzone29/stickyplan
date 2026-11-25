@@ -9,21 +9,36 @@
 
 Pada MVP v1.0, aplikasi bersifat **100% Client-Side Offline-First** menggunakan penyimpanan lokal terversioning di balik abstraksi `ItineraryRepository`. Struktur tabel dirancang **1:1 relasional** agar perpindahan ke PostgreSQL / Supabase / Cloudflare D1 di masa depan tidak mengubah logika domain.
 
-### 1. Amplop Penyimpanan Lokal (`StickyPlanStoreV1`)
+### 1. Amplop Penyimpanan Lokal v2.0 (`StickyPlanDataV1` — `stickyplan_data_v1`)
 
-Kunci `localStorage`: `${VITE_STORAGE_NAMESPACE}:store` (default: `stickyplan_v1:store`)  
-Kunci karantina data korup: `${VITE_STORAGE_NAMESPACE}:corrupt_backup`
+Kunci `localStorage`: `stickyplan_data_v1` (dengan migrasi otomatis dari `stickyplan_v1:store` bila ada jadwal pengguna, atau muat otomatis jadwal default **Audit Perum LKBN ANTARA Biro Lampung**).
 
 ```ts
-export interface StickyPlanStoreV1 {
+export interface StickyPlanDataV1 {
   schema_version: 1;
-  active_trip_id: string;        // UUID v4
-  last_exported_at: string | null; // ISO 8601 UTC timestamp atau null
-  trips: TripRecord[];
-  day_sheets: DaySheetRecord[];
-  itinerary_items: ItineraryItemRecord[];
+  last_exported_at: string | null;
+  trip: {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+  };
+  day_sheets: Array<{
+    id: string;
+    date: string; // YYYY-MM-DD
+    note_color: 'warm-yellow' | 'mint' | 'cream' | 'soft-blue';
+    day_summary: string; // max 100 chars ('' jika kosong)
+    items: Array<{
+      id: string;
+      start_time: string; // HH:mm
+      title: string; // max 80 chars
+      description: string; // max 1000 chars ('' jika kosong)
+      maps_url: string | null;
+    }>;
+  }>;
 }
 ```
+*(Validator Impor JSON juga tetap menerima format relasional datar v1 secara mundur / backward-compatible).*
 
 ### 2. Definisi Entitas, Tipe, & Batas Validasi
 

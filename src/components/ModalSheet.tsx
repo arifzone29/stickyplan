@@ -40,7 +40,6 @@ export function ModalSheet({
     };
     dialog.addEventListener('close', handleClose);
 
-    // Safari fallback where declarative closedby="any" is not yet supported
     let cleanupFallback: (() => void) | undefined;
     if (
       typeof HTMLDialogElement !== 'undefined' &&
@@ -86,22 +85,25 @@ export function ModalSheet({
       ref={dialogRef}
       aria-labelledby={titleId}
       {...({ closedby: 'any' } as Record<string, string>)}
-      className="bottom-sheet-dialog m-0 mt-auto mx-auto w-full max-w-[460px] max-h-[88dvh] rounded-t-[20px] border-0 bg-[var(--surface-sheet)] p-0 text-[var(--ink-primary)] shadow-xl"
+      className="bottom-sheet-dialog z-40 m-0 mt-auto mx-auto w-full max-w-md max-h-[88dvh] rounded-t-3xl border-0 bg-white p-0 text-stone-900 shadow-2xl"
     >
-      <div className="flex items-center justify-between border-b border-[#E7E2D8] px-4 py-3 shrink-0">
-        <h1 id={titleId} className="text-[17px] font-semibold leading-snug m-0">
+      <div className="pt-2.5 pb-1 flex justify-center shrink-0">
+        <div aria-hidden="true" className="h-1 w-10 rounded-full bg-stone-300" />
+      </div>
+      <div className="flex items-center justify-between border-b border-stone-200 px-5 pb-3 pt-1 shrink-0">
+        <h1 id={titleId} className="text-base font-bold text-stone-900 m-0">
           {title}
         </h1>
         <button
           type="button"
           onClick={() => dialogRef.current?.close()}
           aria-label="Tutup panel"
-          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[10px] text-[var(--ink-secondary)] hover:bg-[#ECE7DD]"
+          className="inline-flex h-9 w-9 min-h-[40px] min-w-[40px] items-center justify-center rounded-xl text-stone-500 hover:bg-stone-100 active:scale-95 transition-transform"
         >
           <CloseIcon className="w-5 h-5" />
         </button>
       </div>
-      <div className="overflow-y-auto px-4 py-4 safe-bottom-pad">
+      <div className="overflow-y-auto px-5 py-4 safe-bottom-pad">
         {children}
       </div>
     </dialog>
