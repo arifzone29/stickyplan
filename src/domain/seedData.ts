@@ -79,10 +79,10 @@ const LAMPUNG_SEED_DATA: StickyPlanStoreV1 = {
         {
           id: 'item-1-8',
           start_time: '17:00',
-          title: 'Pengantaran ke hotel',
+          title: 'Pengantaran ke Hotel Grand Mercure Lampung',
           description:
-            '17.00–selesai | Mengantarkan tim Komdigi dan staf ANTARA Pusat menuju hotel untuk beristirahat.',
-          maps_url: null,
+            '17.00–selesai | Mengantarkan tim Komdigi dan staf ANTARA Pusat menuju Hotel Grand Mercure Lampung untuk beristirahat.',
+          maps_url: 'https://maps.app.goo.gl/n1AaRHHuubSzGed98',
         },
       ],
     },
@@ -194,4 +194,46 @@ const LAMPUNG_SEED_DATA: StickyPlanStoreV1 = {
 
 export function createLampungDefaultStore(): StickyPlanStoreV1 {
   return structuredClone(LAMPUNG_SEED_DATA);
+}
+
+export function upgradeLampungSeedStoreIfNeeded(
+  store: StickyPlanStoreV1,
+): { store: StickyPlanStoreV1; changed: boolean } {
+  if (store.trip.id !== 'trip-audit-antara-lampung-2026') {
+    return { store, changed: false };
+  }
+
+  let changed = false;
+  const updatedSheets = store.day_sheets.map((sheet) => {
+    if (sheet.date !== '2026-11-26') return sheet;
+    const updatedItems = sheet.items.map((item) => {
+      if (
+        item.id === 'item-1-8' &&
+        item.start_time === '17:00' &&
+        item.title === 'Pengantaran ke hotel' &&
+        item.maps_url === null
+      ) {
+        changed = true;
+        return {
+          ...item,
+          title: 'Pengantaran ke Hotel Grand Mercure Lampung',
+          description:
+            '17.00–selesai | Mengantarkan tim Komdigi dan staf ANTARA Pusat menuju Hotel Grand Mercure Lampung untuk beristirahat.',
+          maps_url: 'https://maps.app.goo.gl/n1AaRHHuubSzGed98',
+        };
+      }
+      return item;
+    });
+    return changed ? { ...sheet, items: updatedItems } : sheet;
+  });
+
+  if (!changed) return { store, changed: false };
+
+  return {
+    store: {
+      ...store,
+      day_sheets: updatedSheets,
+    },
+    changed: true,
+  };
 }

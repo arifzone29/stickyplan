@@ -18,7 +18,14 @@ describe('Lampung default rundown seed data', () => {
     expect(day1.items).toHaveLength(8);
     expect(day1.items[0]?.start_time).toBe('10:30');
     expect(day1.items[0]?.title).toBe('Penjemputan rombongan');
-    expect(day1.items[7]?.title).toBe('Pengantaran ke hotel');
+    expect(day1.items[7]?.start_time).toBe('17:00');
+    expect(day1.items[7]?.title).toBe(
+      'Pengantaran ke Hotel Grand Mercure Lampung',
+    );
+    expect(day1.items[7]?.description).toContain('Grand Mercure Lampung');
+    expect(day1.items[7]?.maps_url).toBe(
+      'https://maps.app.goo.gl/n1AaRHHuubSzGed98',
+    );
 
     const day2 = store.day_sheets[1]!;
     expect(day2.date).toBe('2026-11-27');

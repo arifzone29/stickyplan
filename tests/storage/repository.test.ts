@@ -47,6 +47,61 @@ describe('LocalStorageItineraryRepository (v2.0)', () => {
     }
   });
 
+  it('auto-upgrades cached 17:00 item-1-8 to Grand Mercure Lampung without wiping other user items', () => {
+    const olderCachedJson = JSON.stringify({
+      schema_version: 1,
+      trip: {
+        id: 'trip-audit-antara-lampung-2026',
+        title: 'Audit Perum LKBN ANTARA Biro Lampung',
+        created_at: '2026-11-25T16:40:00+07:00',
+        updated_at: '2026-11-25T16:40:00+07:00',
+      },
+      day_sheets: [
+        {
+          id: 'day-2026-11-26',
+          date: '2026-11-26',
+          note_color: 'warm-yellow',
+          day_summary: 'Kedatangan dan Kunjungan ke Mitra',
+          items: [
+            {
+              id: 'custom-user-item',
+              start_time: '08:00',
+              title: 'Sarapan Pagi',
+              description: null,
+              maps_url: null,
+            },
+            {
+              id: 'item-1-8',
+              start_time: '17:00',
+              title: 'Pengantaran ke hotel',
+              description:
+                '17.00–selesai | Mengantarkan tim Komdigi dan staf ANTARA Pusat menuju hotel untuk beristirahat.',
+              maps_url: null,
+            },
+          ],
+        },
+      ],
+    });
+    backend.setItem('test_v2', olderCachedJson);
+
+    const repo = createLocalStorageRepository({
+      storage: backend,
+      storageKey: 'test_v2',
+    });
+    const boot = repo.loadOrInitialize();
+    expect(boot.status).toBe('ready');
+    if (boot.status === 'ready') {
+      const items = boot.store.day_sheets[0]!.items;
+      expect(items[0]?.title).toBe('Sarapan Pagi');
+      expect(items[1]?.title).toBe(
+        'Pengantaran ke Hotel Grand Mercure Lampung',
+      );
+      expect(items[1]?.maps_url).toBe(
+        'https://maps.app.goo.gl/n1AaRHHuubSzGed98',
+      );
+    }
+  });
+
   it('jumps to existing date instead of duplicating, preserves custom reorder on edit, and sorts on sortSheetByTime', () => {
     const repo = createLocalStorageRepository({
       storage: backend,

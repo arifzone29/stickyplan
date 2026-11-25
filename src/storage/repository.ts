@@ -1,5 +1,8 @@
 import { parseBulkInputText } from '../domain/bulkParser';
-import { createLampungDefaultStore } from '../domain/seedData';
+import {
+  createLampungDefaultStore,
+  upgradeLampungSeedStoreIfNeeded,
+} from '../domain/seedData';
 import {
   reorderArrayItem,
   sortDaySheets,
@@ -253,7 +256,16 @@ export function createLocalStorageRepository(
         };
       }
 
-      return { status: 'ready', store: validated.data };
+      return {
+        status: 'ready',
+        store: (() => {
+          const upgraded = upgradeLampungSeedStoreIfNeeded(validated.data);
+          if (upgraded.changed) {
+            persistStore(upgraded.store);
+          }
+          return upgraded.store;
+        })(),
+      };
     },
 
     resetToDefaultSeed(): Result<StickyPlanStoreV1> {
