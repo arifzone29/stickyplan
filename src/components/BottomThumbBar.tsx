@@ -41,7 +41,7 @@ export function BottomThumbBar({
           className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-[var(--accent-primary)] px-4 text-[15px] font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed hover:bg-[var(--accent-primary-hover)]"
         >
           <PlusIcon className="w-5 h-5" />
-          <span>+ Kegiatan</span>
+          <span>Tambah Kegiatan</span>
         </button>
 
         <button

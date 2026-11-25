@@ -38,10 +38,12 @@ describe('StickyPlan full UI flows (Phases 3, 4, and 5)', () => {
       screen.getByText(/Belum ada kegiatan di tanggal ini/i),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /\+ Tanggal/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Tambah Tanggal/i }));
     const dateInput = screen.getByLabelText(/Pilih Tanggal/i);
     fireEvent.input(dateInput, { target: { value: '2026-11-27' } });
-    fireEvent.click(screen.getByRole('button', { name: /Tambah Tanggal/i }));
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /^Tambah Tanggal$/i }).at(-1)!,
+    );
 
     expect(screen.getByText('Jumat, 27 Nov 2026')).toBeInTheDocument();
 
@@ -61,7 +63,7 @@ describe('StickyPlan full UI flows (Phases 3, 4, and 5)', () => {
 
     render(<App repository={repo} getTodayLocal={() => '2026-11-25'} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /\+ Kegiatan/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Tambah Kegiatan$/i }));
     fireEvent.input(screen.getByLabelText(/Jam Mulai/i), {
       target: { value: '14:00' },
     });
@@ -78,7 +80,7 @@ describe('StickyPlan full UI flows (Phases 3, 4, and 5)', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Simpan Kegiatan/i }));
 
-    fireEvent.click(screen.getByRole('button', { name: /\+ Kegiatan/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Tambah Kegiatan$/i }));
     fireEvent.input(screen.getByLabelText(/Jam Mulai/i), {
       target: { value: '08:30' },
     });

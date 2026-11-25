@@ -10,7 +10,7 @@ test.describe('StickyPlan Mobile PWA E2E (390x844 + Offline Mode)', () => {
     await expect(page.getByText('Itinerary Saya')).toBeVisible();
 
     // Add afternoon item first, then morning item to verify chronological sorting
-    await page.getByRole('button', { name: '+ Kegiatan' }).click();
+    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
     await page.getByLabel(/Jam Mulai/i).fill('14:30');
     await page.getByLabel(/Judul Kegiatan/i).fill('Rapat Evaluasi Kantor');
     await page
@@ -21,7 +21,7 @@ test.describe('StickyPlan Mobile PWA E2E (390x844 + Offline Mode)', () => {
       .fill('Bawa dokumen KAK & kode akses Lantai 3');
     await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();
 
-    await page.getByRole('button', { name: '+ Kegiatan' }).click();
+    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
     await page.getByLabel(/Jam Mulai/i).fill('07:45');
     await page.getByLabel(/Judul Kegiatan/i).fill('Kereta Cepat Halim');
     await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();
@@ -60,7 +60,7 @@ test.describe('StickyPlan Mobile PWA E2E (390x844 + Offline Mode)', () => {
     await expect(page.getByText('Rapat Evaluasi Kantor')).toBeVisible();
 
     // Add item while completely offline
-    await page.getByRole('button', { name: '+ Kegiatan' }).click();
+    await page.getByRole('button', { name: 'Tambah Kegiatan', exact: true }).click();
     await page.getByLabel(/Jam Mulai/i).fill('19:00');
     await page.getByLabel(/Judul Kegiatan/i).fill('Makan Malam Braga');
     await page.getByRole('button', { name: 'Simpan Kegiatan' }).click();

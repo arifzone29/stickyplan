@@ -133,10 +133,11 @@ export function DatePillStrip({
         <button
           type="button"
           onClick={openAddSheet}
-          className="shrink-0 inline-flex min-h-[44px] items-center gap-1 rounded-[10px] border border-dashed border-[#A8A092] bg-transparent px-3 text-[14px] font-medium text-[var(--ink-primary)] hover:bg-[#E7E2D8]"
+          aria-label="Tambah Tanggal"
+          className="shrink-0 inline-flex min-h-[44px] items-center gap-1.5 rounded-[10px] border border-dashed border-[#A8A092] bg-transparent px-3 text-[14px] font-medium text-[var(--ink-primary)] hover:bg-[#E7E2D8]"
         >
           <PlusIcon className="w-4 h-4" />
-          <span>+ Tanggal</span>
+          <span>Tanggal</span>
         </button>
       </div>
 
